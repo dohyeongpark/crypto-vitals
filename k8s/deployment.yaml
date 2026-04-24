@@ -14,10 +14,13 @@ spec:
       labels:
         app: collector
     spec:
+      serviceAccountName: collector
       containers:
         - name: collector
           image: asia-northeast3-docker.pkg.dev/parkdh0121/crypto-vitals/collector:latest
           env:
+            - name: BQ_PROJECT
+              value: "parkdh0121"
             - name: BINANCE_API_KEY
               valueFrom:
                 secretKeyRef:
