@@ -45,3 +45,53 @@ resource "google_artifact_registry_repository" "collector" {
   repository_id = "crypto-vitals"
   format        = "DOCKER"
 }
+
+# 5. BigQuery 데이터셋
+resource "google_bigquery_dataset" "crypto_vitals" {
+  dataset_id = "crypto_vitals"
+  location   = var.region
+}
+
+# 6. BigQuery 테이블 (OHLCV + 변동성)
+resource "google_bigquery_table" "ohlcv" {
+  dataset_id          = google_bigquery_dataset.crypto_vitals.dataset_id
+  table_id            = "ohlcv"
+  deletion_protection = false
+
+  time_partitioning {
+    type  = "DAY"
+    field = "timestamp"
+  }
+
+  schema = jsonencode([
+    { name = "symbol",        type = "STRING",    mode = "REQUIRED" },
+    { name = "timestamp",     type = "TIMESTAMP", mode = "REQUIRED" },
+    { name = "open",          type = "FLOAT64",   mode = "REQUIRED" },
+    { name = "high",          type = "FLOAT64",   mode = "REQUIRED" },
+    { name = "low",           type = "FLOAT64",   mode = "REQUIRED" },
+    { name = "close",         type = "FLOAT64",   mode = "REQUIRED" },
+    { name = "volume",        type = "FLOAT64",   mode = "REQUIRED" },
+    { name = "volatility_5m", type = "FLOAT64",   mode = "NULLABLE" },
+    { name = "collected_at",  type = "TIMESTAMP", mode = "REQUIRED" },
+  ])
+}
+
+# 7. GCP Service Account (collector Pod용)
+resource "google_service_account" "collector" {
+  account_id   = "collector-sa"
+  display_name = "Collector Service Account"
+}
+
+# 8. BigQuery 쓰기 권한 부여
+resource "google_bigquery_dataset_iam_member" "collector_bq_writer" {
+  dataset_id = google_bigquery_dataset.crypto_vitals.dataset_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:${google_service_account.collector.email}"
+}
+
+# 9. Workload Identity 바인딩 (K8s SA → GCP SA)
+resource "google_service_account_iam_member" "workload_identity" {
+  service_account_id = google_service_account.collector.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.project_id}.svc.id.goog[default/collector]"
+}
