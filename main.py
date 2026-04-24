@@ -14,6 +14,7 @@ from collections import deque
 
 import ccxt
 import pandas as pd
+from google.cloud import bigquery
 
 # ---------------------------------------------------------------------------
 # Logging — plain text with ISO-8601 timestamps, goes to stdout for K8s
@@ -37,6 +38,10 @@ VOLATILITY_WINDOW = 5          # minutes of returns used for std-dev
 FETCH_LIMIT = VOLATILITY_WINDOW + 2   # fetch a few extra for safety
 MAX_RETRIES = 5
 RETRY_BASE_DELAY = 2.0         # seconds; exponential backoff
+
+BQ_PROJECT = os.environ.get("BQ_PROJECT", "")
+BQ_DATASET = os.environ.get("BQ_DATASET", "crypto_vitals")
+BQ_TABLE   = os.environ.get("BQ_TABLE", "ohlcv")
 
 
 # ---------------------------------------------------------------------------
@@ -194,13 +199,26 @@ def seconds_until_next_minute() -> float:
     return 60.0 - (now % 60.0)
 
 
+_bq_client: bigquery.Client | None = None
+
+
+def _get_bq_client() -> bigquery.Client:
+    global _bq_client
+    if _bq_client is None:
+        _bq_client = bigquery.Client(project=BQ_PROJECT or None)
+    return _bq_client
+
+
 def emit_records(records: list[dict]) -> None:
-    """
-    Emit collected records as newline-delimited JSON to stdout.
-    Swap this out for a DB writer / Pub/Sub publisher as needed.
-    """
     for record in records:
-        print(json.dumps(record, ensure_ascii=False))
+        logger.info(json.dumps(record, ensure_ascii=False))
+
+    table_ref = f"{BQ_PROJECT}.{BQ_DATASET}.{BQ_TABLE}" if BQ_PROJECT else f"{BQ_DATASET}.{BQ_TABLE}"
+    errors = _get_bq_client().insert_rows_json(table_ref, records)
+    if errors:
+        logger.error("BigQuery insert errors: %s", errors)
+    else:
+        logger.info("Inserted %d row(s) into %s", len(records), table_ref)
 
 
 # ---------------------------------------------------------------------------
