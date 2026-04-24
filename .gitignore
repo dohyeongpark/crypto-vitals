@@ -1,1 +1,7 @@
 .env
+*.tar
+*.tfvars
+*.pdf
+*.tfstate
+*.tfstate.backup
+.terraform/
