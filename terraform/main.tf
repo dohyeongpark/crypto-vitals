@@ -1,58 +1,22 @@
-# Google Cloud Provider 설정
 provider "google" {
   project = var.project_id
   region  = var.region
 }
 
-# 1. VPC 네트워크 생성
-resource "google_compute_network" "vpc_network" {
-  name                    = "crypto-vitals-vpc"
-  auto_create_subnetworks = false
-}
-
-# 2. 서브넷 생성 (GKE용)
-resource "google_compute_subnetwork" "gke_subnet" {
-  name          = "gke-subnet"
-  ip_cidr_range = "10.0.0.0/20"
-  region        = var.region
-  network       = google_compute_network.vpc_network.id
-}
-
-# 3. GKE Autopilot 클러스터 정의
-resource "google_container_cluster" "primary" {
-  name     = "crypto-vitals-cluster"
-  location = var.region
-
-  # Autopilot 활성화 (핵심!)
-  enable_autopilot = true
-
-  network    = google_compute_network.vpc_network.name
-  subnetwork = google_compute_subnetwork.gke_subnet.name
-
-  # 보안을 위해 공개 엔드포인트 제한 (선택 사항)
-  ip_allocation_policy {
-    cluster_ipv4_cidr_block  = "/14"
-    services_ipv4_cidr_block = "/20"
-  }
-
-  # 취업 포트폴리오용: 리소스 가용성 보장을 위해 삭제 방지 설정
-  deletion_protection = false
-}
-
-# 4. Artifact Registry 저장소 (Docker 이미지)
+# 1. Artifact Registry (Docker 이미지)
 resource "google_artifact_registry_repository" "collector" {
   location      = var.region
   repository_id = "crypto-vitals"
   format        = "DOCKER"
 }
 
-# 5. BigQuery 데이터셋
+# 2. BigQuery 데이터셋
 resource "google_bigquery_dataset" "crypto_vitals" {
   dataset_id = "crypto_vitals"
   location   = var.region
 }
 
-# 6. BigQuery 테이블 (OHLCV + 변동성)
+# 3. BigQuery 테이블 (OHLCV + 변동성, DAY 파티셔닝)
 resource "google_bigquery_table" "ohlcv" {
   dataset_id          = google_bigquery_dataset.crypto_vitals.dataset_id
   table_id            = "ohlcv"
@@ -76,22 +40,116 @@ resource "google_bigquery_table" "ohlcv" {
   ])
 }
 
-# 7. GCP Service Account (collector Pod용)
+# 4. GCP Service Account (collector VM용)
 resource "google_service_account" "collector" {
   account_id   = "collector-sa"
   display_name = "Collector Service Account"
 }
 
-# 8. BigQuery 쓰기 권한 부여
 resource "google_bigquery_dataset_iam_member" "collector_bq_writer" {
   dataset_id = google_bigquery_dataset.crypto_vitals.dataset_id
   role       = "roles/bigquery.dataEditor"
   member     = "serviceAccount:${google_service_account.collector.email}"
 }
 
-# 9. Workload Identity 바인딩 (K8s SA → GCP SA)
-resource "google_service_account_iam_member" "workload_identity" {
-  service_account_id = google_service_account.collector.name
-  role               = "roles/iam.workloadIdentityUser"
-  member             = "serviceAccount:${var.project_id}.svc.id.goog[default/collector]"
+# 5. Secret Manager API 활성화
+resource "google_project_service" "secretmanager" {
+  service            = "secretmanager.googleapis.com"
+  disable_on_destroy = false
+}
+
+# 6. Binance API 키 Secret 등록
+resource "google_secret_manager_secret" "binance_api_key" {
+  secret_id  = "binance-api-key"
+  depends_on = [google_project_service.secretmanager]
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "binance_api_key" {
+  secret      = google_secret_manager_secret.binance_api_key.id
+  secret_data = var.binance_api_key
+}
+
+resource "google_secret_manager_secret" "binance_api_secret" {
+  secret_id  = "binance-api-secret"
+  depends_on = [google_project_service.secretmanager]
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "binance_api_secret" {
+  secret      = google_secret_manager_secret.binance_api_secret.id
+  secret_data = var.binance_api_secret
+}
+
+resource "google_project_iam_member" "collector_secret_accessor" {
+  project = var.project_id
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${google_service_account.collector.email}"
+}
+
+# 7. GCS 버킷 (collector 코드 저장)
+resource "google_storage_bucket" "code" {
+  name          = "${var.project_id}-collector-code"
+  location      = "US"
+  force_destroy = true
+}
+
+resource "google_storage_bucket_object" "main_py" {
+  name   = "main.py"
+  bucket = google_storage_bucket.code.name
+  source = "../main.py"
+}
+
+resource "google_storage_bucket_object" "requirements_txt" {
+  name   = "requirements.txt"
+  bucket = google_storage_bucket.code.name
+  source = "../requirements.txt"
+}
+
+resource "google_storage_bucket_iam_member" "collector_storage_reader" {
+  bucket = google_storage_bucket.code.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.collector.email}"
+}
+
+# 8. GCE e2-micro (무료 티어, us-central1)
+resource "google_compute_instance" "collector" {
+  name         = "collector-vm"
+  machine_type = "e2-micro"
+  zone         = "us-central1-a"
+
+  boot_disk {
+    initialize_params {
+      image = "debian-cloud/debian-12"
+      size  = 10
+    }
+  }
+
+  network_interface {
+    network = "default"
+    access_config {}
+  }
+
+  service_account {
+    email  = google_service_account.collector.email
+    scopes = ["cloud-platform"]
+  }
+
+  metadata_startup_script = templatefile("${path.module}/startup.sh.tpl", {
+    bucket_name = google_storage_bucket.code.name
+    project_id  = var.project_id
+  })
+
+  depends_on = [
+    google_storage_bucket_object.main_py,
+    google_storage_bucket_object.requirements_txt,
+    google_secret_manager_secret_version.binance_api_key,
+    google_secret_manager_secret_version.binance_api_secret,
+    google_project_iam_member.collector_secret_accessor,
+    google_storage_bucket_iam_member.collector_storage_reader,
+  ]
 }
