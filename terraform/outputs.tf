@@ -15,5 +15,5 @@ output "collector_vm_ip" {
 
 output "collector_vm_ssh" {
   description = "VM SSH 접속 명령어"
-  value       = "gcloud compute ssh collector-vm --zone=us-central1-a --project=${var.project_id}"
+  value       = "gcloud compute ssh collector-vm --zone=asia-northeast3-a --project=${var.project_id}"
 }

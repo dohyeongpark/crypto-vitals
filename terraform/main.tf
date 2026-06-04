@@ -120,7 +120,7 @@ resource "google_storage_bucket_iam_member" "collector_storage_reader" {
 resource "google_compute_instance" "collector" {
   name         = "collector-vm"
   machine_type = "e2-micro"
-  zone         = "us-central1-a"
+  zone         = "asia-northeast3-a"
 
   boot_disk {
     initialize_params {
