@@ -23,7 +23,7 @@ SELECT
   ROUND(COUNT(*) / NULLIF(
     DATE_DIFF(DATE(MAX(timestamp)), DATE(MIN(timestamp)), DAY) + 1, 0
   ) / 1440.0 * 100, 2)                        AS completeness_pct
-FROM `parkdh0121.crypto_vitals.ohlcv`
+FROM `parkdh0121.crypto_vitals.ohlcv_dedup`
 GROUP BY symbol
 ORDER BY symbol;
 
@@ -37,7 +37,7 @@ SELECT
   COUNT(*)                                    AS row_count,
   1440 - COUNT(*)                             AS missing_minutes,
   CASE WHEN COUNT(*) < 1400 THEN 'WARN' ELSE 'OK' END AS status
-FROM `parkdh0121.crypto_vitals.ohlcv`
+FROM `parkdh0121.crypto_vitals.ohlcv_dedup`
 GROUP BY symbol, trade_day
 ORDER BY symbol, trade_day;
 
@@ -51,7 +51,7 @@ WITH ordered AS (
     symbol,
     timestamp,
     LEAD(timestamp) OVER (PARTITION BY symbol ORDER BY timestamp) AS next_ts
-  FROM `parkdh0121.crypto_vitals.ohlcv`
+  FROM `parkdh0121.crypto_vitals.ohlcv_dedup`
 ),
 gaps AS (
   SELECT
@@ -76,7 +76,7 @@ SELECT
   symbol,
   timestamp,
   COUNT(*) AS cnt
-FROM `parkdh0121.crypto_vitals.ohlcv`
+FROM `parkdh0121.crypto_vitals.ohlcv_dedup`
 GROUP BY symbol, timestamp
 HAVING cnt > 1
 ORDER BY cnt DESC
@@ -100,7 +100,7 @@ SELECT
     WHEN close <= 0   THEN 'non-positive close'
     WHEN volume < 0   THEN 'negative volume'
   END AS violation
-FROM `parkdh0121.crypto_vitals.ohlcv`
+FROM `parkdh0121.crypto_vitals.ohlcv_dedup`
 WHERE
      high < open
   OR high < close
@@ -122,7 +122,7 @@ WITH daily_stats AS (
     DATE(timestamp)  AS day,
     AVG(close)       AS mean_close,
     STDDEV(close)    AS std_close
-  FROM `parkdh0121.crypto_vitals.ohlcv`
+  FROM `parkdh0121.crypto_vitals.ohlcv_dedup`
   GROUP BY symbol, day
 )
 SELECT
@@ -132,7 +132,7 @@ SELECT
   d.mean_close,
   d.std_close,
   ROUND(ABS(o.close - d.mean_close) / NULLIF(d.std_close, 0), 2) AS z_score
-FROM `parkdh0121.crypto_vitals.ohlcv` o
+FROM `parkdh0121.crypto_vitals.ohlcv_dedup` o
 JOIN daily_stats d
   ON o.symbol = d.symbol AND DATE(o.timestamp) = d.day
 WHERE ABS(o.close - d.mean_close) / NULLIF(d.std_close, 0) > 5
@@ -147,7 +147,7 @@ WITH daily_median AS (
     symbol,
     DATE(timestamp)                            AS day,
     APPROX_QUANTILES(volume, 100)[OFFSET(50)]  AS median_volume
-  FROM `parkdh0121.crypto_vitals.ohlcv`
+  FROM `parkdh0121.crypto_vitals.ohlcv_dedup`
   GROUP BY symbol, day
 )
 SELECT
@@ -156,7 +156,7 @@ SELECT
   ROUND(o.volume, 2)          AS volume,
   ROUND(d.median_volume, 2)   AS daily_median_vol,
   ROUND(o.volume / NULLIF(d.median_volume, 0), 1) AS x_median
-FROM `parkdh0121.crypto_vitals.ohlcv` o
+FROM `parkdh0121.crypto_vitals.ohlcv_dedup` o
 JOIN daily_median d
   ON o.symbol = d.symbol AND DATE(o.timestamp) = d.day
 WHERE o.volume > d.median_volume * 10
@@ -176,7 +176,7 @@ SELECT
   ROUND(AVG(volatility_5m), 8)               AS mean_volatility,
   ROUND(MAX(volatility_5m), 8)               AS max_volatility,
   ROUND(MIN(volatility_5m), 8)               AS min_volatility
-FROM `parkdh0121.crypto_vitals.ohlcv`
+FROM `parkdh0121.crypto_vitals.ohlcv_dedup`
 GROUP BY symbol;
 
 
@@ -192,7 +192,7 @@ SELECT
     TIMESTAMP_DIFF(collected_at, timestamp, SECOND), 100
   )[OFFSET(95)], 1)                                               AS p95_latency_s,
   COUNTIF(TIMESTAMP_DIFF(collected_at, timestamp, SECOND) > 120)  AS late_rows_gt2min
-FROM `parkdh0121.crypto_vitals.ohlcv`
+FROM `parkdh0121.crypto_vitals.ohlcv_dedup`
 GROUP BY symbol;
 
 
@@ -201,18 +201,18 @@ GROUP BY symbol;
 -- -----------------------------------------------------------------------------
 WITH
 base AS (
-  SELECT symbol, COUNT(*) AS total FROM `parkdh0121.crypto_vitals.ohlcv` GROUP BY symbol
+  SELECT symbol, COUNT(*) AS total FROM `parkdh0121.crypto_vitals.ohlcv_dedup` GROUP BY symbol
 ),
 dupes AS (
   SELECT symbol, COUNT(*) AS dup_pairs
   FROM (
     SELECT symbol, timestamp, COUNT(*) AS c
-    FROM `parkdh0121.crypto_vitals.ohlcv` GROUP BY symbol, timestamp HAVING c > 1
+    FROM `parkdh0121.crypto_vitals.ohlcv_dedup` GROUP BY symbol, timestamp HAVING c > 1
   ) GROUP BY symbol
 ),
 ohlc_violations AS (
   SELECT symbol, COUNT(*) AS violations
-  FROM `parkdh0121.crypto_vitals.ohlcv`
+  FROM `parkdh0121.crypto_vitals.ohlcv_dedup`
   WHERE high < open OR high < close OR low > open OR low > close
      OR high < low OR open <= 0 OR close <= 0 OR volume < 0
   GROUP BY symbol
@@ -220,7 +220,7 @@ ohlc_violations AS (
 null_vol AS (
   SELECT symbol,
     ROUND(COUNTIF(volatility_5m IS NULL) / COUNT(*) * 100, 2) AS null_pct
-  FROM `parkdh0121.crypto_vitals.ohlcv` GROUP BY symbol
+  FROM `parkdh0121.crypto_vitals.ohlcv_dedup` GROUP BY symbol
 )
 SELECT
   b.symbol,
