@@ -54,10 +54,13 @@ class VolatilityDataset(Dataset):
         X      = torch.from_numpy(normalize(window))         # float32
 
         # Realized volatility = std of log-returns over the next horizon bars.
-        # closes[i-1] is the base for the first future return.
+        # Log-transformed so the target is closer to normally distributed,
+        # which stabilizes MSE training (raw volatility is right-skewed).
+        # exp() during evaluation converts predictions back to original scale.
         fut_closes      = self.closes[i - 1 : i + self.horizon]
         fut_log_returns = np.log(fut_closes[1:] / fut_closes[:-1])
-        y = torch.tensor(float(np.std(fut_log_returns)), dtype=torch.float32)
+        log_vol = np.log(np.std(fut_log_returns) + 1e-8)
+        y = torch.tensor(float(log_vol), dtype=torch.float32)
 
         return X, y
 
