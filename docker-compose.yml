@@ -1,13 +1,35 @@
 services:
-  collector:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-cryptodb}
+    volumes:
+      - /data/timescaledb:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    ports:
+      # DB 포트는 루프백에만 바인딩 — 외부 노출 안 함
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-cryptodb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  oi_scheduler:
     build:
       context: .
       dockerfile: Dockerfile
-    env_file:
-      - .env
-    restart: "no"
+    command: python -m src.collectors.oi_scheduler
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      timescaledb:
+        condition: service_healthy
     logging:
       driver: json-file
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "20m"
+        max-file: "5"
