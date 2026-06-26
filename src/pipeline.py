@@ -64,10 +64,10 @@ def main() -> None:
         default_end = (now.year, now.month - 1)
 
     if args.months:
-        em, ey = default_end
-        total = em + ey * 12 - (args.months - 1)
+        end_y, end_m = default_end
+        total = end_y * 12 + end_m - (args.months - 1)
         sy, sm = divmod(total - 1, 12)
-        start = (sy + 1, sm + 1)
+        start = (sy, sm + 1)
         end = default_end
     else:
         start = _parse_ym(args.start) if args.start else (now.year - 3, now.month)
