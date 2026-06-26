@@ -75,7 +75,15 @@ CREATE TABLE IF NOT EXISTS pair_features (
     spread_mean      NUMERIC(20,8),                   -- rolling mean of spread
     spread_std       NUMERIC(20,8),                   -- rolling std of spread
     zscore           NUMERIC(20,8),                   -- robust z-score (MAD)
-    feature_version  VARCHAR(20)    NOT NULL,          -- 'v0.1-ols'
+    -- v0.2-regime: regime feature columns (basis / taker / funding)
+    funding_rate_y   NUMERIC(12,8),                   -- ETH perp funding rate (forward-filled)
+    funding_rate_x   NUMERIC(12,8),                   -- BTC perp funding rate (forward-filled)
+    funding_spread   NUMERIC(12,8),                   -- funding_rate_y - funding_rate_x
+    taker_ratio_y    NUMERIC(10,8),                   -- ETH taker_buy_volume / volume
+    taker_ratio_x    NUMERIC(10,8),                   -- BTC taker_buy_volume / volume
+    basis_y          NUMERIC(20,8),                   -- ETH (perp_close - spot_close) / spot_close
+    basis_x          NUMERIC(20,8),                   -- BTC (perp_close - spot_close) / spot_close
+    feature_version  VARCHAR(20)    NOT NULL,          -- 'v0.2-regime'
     computed_at      TIMESTAMPTZ    NOT NULL DEFAULT now(),
     PRIMARY KEY (pair_id, interval, timestamp, feature_version)
 );

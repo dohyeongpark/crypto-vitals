@@ -29,6 +29,7 @@ from src.collectors.funding import run as funding_run
 from src.features.integrity import check as integrity_check, print_summary
 from src.features.volatility import compute_and_store as vol_compute
 from src.features.pair_spread import compute_and_store as spread_compute
+from src.features.regime import compute_and_store as regime_compute
 from src.config import SYMBOLS, FEATURE_WINDOW_H, FEATURE_VERSION
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ def main() -> None:
     parser.add_argument("--skip-integrity", action="store_true")
     parser.add_argument("--skip-vol", action="store_true")
     parser.add_argument("--skip-spread", action="store_true")
+    parser.add_argument("--skip-regime", action="store_true")
     args = parser.parse_args()
 
     now = datetime.now(timezone.utc)
@@ -75,47 +77,54 @@ def main() -> None:
 
     # ── Step 1: klines ────────────────────────────────────────────────────────
     if not args.skip_klines:
-        logger.info("=== Step 1/5: klines download ===")
+        logger.info("=== Step 1/6: klines download ===")
         klines_download(args.symbols, args.market, start, end)
     else:
-        logger.info("=== Step 1/5: klines SKIPPED ===")
+        logger.info("=== Step 1/6: klines SKIPPED ===")
 
     # ── Step 2: funding rates ─────────────────────────────────────────────────
     if not args.skip_funding:
-        logger.info("=== Step 2/5: funding rates ===")
+        logger.info("=== Step 2/6: funding rates ===")
         start_dt = datetime(start[0], start[1], 1, tzinfo=timezone.utc)
         end_dt = datetime(end[0], end[1], 28, tzinfo=timezone.utc)  # safe last day
         perp_symbols = [s for s in args.symbols]
         funding_run(perp_symbols, start_dt, end_dt)
     else:
-        logger.info("=== Step 2/5: funding SKIPPED ===")
+        logger.info("=== Step 2/6: funding SKIPPED ===")
 
     # ── Step 3: integrity check ───────────────────────────────────────────────
     if not args.skip_integrity:
-        logger.info("=== Step 3/5: integrity check ===")
+        logger.info("=== Step 3/6: integrity check ===")
         reports = [integrity_check(s, m) for s in args.symbols for m in args.market]
         print_summary(reports)
         n_gaps = sum(r.missing_count for r in reports)
         if n_gaps > 0:
             logger.warning("%d missing candles detected. Continuing (check logs above).", n_gaps)
     else:
-        logger.info("=== Step 3/5: integrity SKIPPED ===")
+        logger.info("=== Step 3/6: integrity SKIPPED ===")
 
     # ── Step 4: realized volatility ───────────────────────────────────────────
     if not args.skip_vol:
-        logger.info("=== Step 4/5: realized volatility ===")
+        logger.info("=== Step 4/6: realized volatility ===")
         for symbol in args.symbols:
             for market_type in args.market:
                 vol_compute(symbol, market_type, args.window)
     else:
-        logger.info("=== Step 4/5: vol SKIPPED ===")
+        logger.info("=== Step 4/6: vol SKIPPED ===")
 
     # ── Step 5: pair features ─────────────────────────────────────────────────
     if not args.skip_spread:
-        logger.info("=== Step 5/5: pair spread / z-score ===")
+        logger.info("=== Step 5/6: pair spread / z-score ===")
         spread_compute(args.window, args.version)
     else:
-        logger.info("=== Step 5/5: spread SKIPPED ===")
+        logger.info("=== Step 5/6: spread SKIPPED ===")
+
+    # ── Step 6: regime features ───────────────────────────────────────────────
+    if not args.skip_regime:
+        logger.info("=== Step 6/6: regime features ===")
+        regime_compute(args.window, args.version)
+    else:
+        logger.info("=== Step 6/6: regime SKIPPED ===")
 
     logger.info("Pipeline complete.")
 
