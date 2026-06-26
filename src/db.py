@@ -228,7 +228,7 @@ _REGIME_UPDATE_SQL_TMPL = """
 """
 
 
-def update_regime_features(rows: list[dict], version: str) -> int:
+def update_regime_features(rows: list[dict], version: str, page_size: int = 1000) -> int:
     """rows: [{timestamp, funding_rate_y, funding_rate_x, funding_spread,
                taker_ratio_y, taker_ratio_x, basis_y, basis_x}]"""
     if not rows:
@@ -238,7 +238,11 @@ def update_regime_features(rows: list[dict], version: str) -> int:
         for r in rows
     ]
     sql = _REGIME_UPDATE_SQL_TMPL.format(version=version)
+    # Paginate manually so cur.rowcount is accurate per batch (not just last page).
+    total = 0
     with get_conn() as conn:
         with conn.cursor() as cur:
-            execute_values(cur, sql, tuples)
-            return cur.rowcount
+            for i in range(0, len(tuples), page_size):
+                execute_values(cur, sql, tuples[i : i + page_size])
+                total += cur.rowcount
+    return total
