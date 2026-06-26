@@ -22,7 +22,7 @@ INTERVAL = "1h"
 
 # ── Feature config ────────────────────────────────────────────────────────────
 FEATURE_WINDOW_H = int(os.getenv("FEATURE_WINDOW_H", "168"))  # 7일
-FEATURE_VERSION = os.getenv("FEATURE_VERSION", "v0.2-regime")
+FEATURE_VERSION = os.getenv("FEATURE_VERSION", "v0.3-kalman")
 
 # ── HTTP ──────────────────────────────────────────────────────────────────────
 HTTP_TIMEOUT = 30

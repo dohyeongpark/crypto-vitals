@@ -83,7 +83,19 @@ CREATE TABLE IF NOT EXISTS pair_features (
     taker_ratio_x    NUMERIC(10,8),                   -- BTC taker_buy_volume / volume
     basis_y          NUMERIC(20,8),                   -- ETH (perp_close - spot_close) / spot_close
     basis_x          NUMERIC(20,8),                   -- BTC (perp_close - spot_close) / spot_close
-    feature_version  VARCHAR(20)    NOT NULL,          -- 'v0.2-regime'
+    -- v0.3-kalman: Kalman filter β / OU parameters / cointegration
+    kalman_beta      NUMERIC(20,8),                   -- Kalman filter dynamic hedge ratio β
+    spread_kalman    NUMERIC(20,8),                   -- log_y - kalman_beta * log_x
+    ou_kappa         NUMERIC(20,8),                   -- OU mean-reversion speed κ (per hour)
+    ou_halflife      NUMERIC(20,8),                   -- ln(2)/κ in hours
+    ou_mu            NUMERIC(20,8),                   -- OU long-run equilibrium mean
+    ou_sigma_eq      NUMERIC(20,8),                   -- OU equilibrium σ = σ_ε / sqrt(1-φ²)
+    ou_zscore        NUMERIC(20,8),                   -- (spread_kalman - ou_mu) / ou_sigma_eq
+    eg_pvalue        NUMERIC(10,8),                   -- rolling Engle-Granger cointegration p-value
+    johansen_trace   NUMERIC(20,8),                   -- rolling Johansen trace stat (r=0)
+    entry_threshold  NUMERIC(20,8),                   -- entry z-score threshold (2.0)
+    exit_threshold   NUMERIC(20,8),                   -- exit z-score threshold (0.5)
+    feature_version  VARCHAR(20)    NOT NULL,          -- 'v0.3-kalman'
     computed_at      TIMESTAMPTZ    NOT NULL DEFAULT now(),
     PRIMARY KEY (pair_id, interval, timestamp, feature_version)
 );
