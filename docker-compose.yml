@@ -25,6 +25,9 @@ services:
     command: python -m src.collectors.oi_scheduler
     restart: unless-stopped
     env_file: .env
+    environment:
+      # docker 네트워크 안에서는 서비스 이름으로 접속 (env_file의 localhost를 덮어씀)
+      DB_HOST: timescaledb
     depends_on:
       timescaledb:
         condition: service_healthy
