@@ -246,3 +246,58 @@ def update_regime_features(rows: list[dict], version: str) -> int:
             # giving an accurate total count regardless of page_size.
             result = execute_values(cur, sql, tuples, fetch=True)
             return len(result)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 2: Kalman β / OU params / cointegration UPDATE
+# ─────────────────────────────────────────────────────────────────────────────
+
+_KALMAN_OU_COLS = (
+    "kalman_beta", "spread_kalman",
+    "ou_kappa", "ou_halflife", "ou_mu", "ou_sigma_eq", "ou_zscore",
+    "eg_pvalue", "johansen_trace",
+    "entry_threshold", "exit_threshold",
+)
+
+_KALMAN_OU_UPDATE_SQL_TMPL = """
+    UPDATE pair_features AS pf
+    SET kalman_beta      = d.kalman_beta::numeric,
+        spread_kalman    = d.spread_kalman::numeric,
+        ou_kappa         = d.ou_kappa::numeric,
+        ou_halflife      = d.ou_halflife::numeric,
+        ou_mu            = d.ou_mu::numeric,
+        ou_sigma_eq      = d.ou_sigma_eq::numeric,
+        ou_zscore        = d.ou_zscore::numeric,
+        eg_pvalue        = d.eg_pvalue::numeric,
+        johansen_trace   = d.johansen_trace::numeric,
+        entry_threshold  = d.entry_threshold::numeric,
+        exit_threshold   = d.exit_threshold::numeric
+    FROM (VALUES %s) AS d(
+        ts,
+        kalman_beta, spread_kalman,
+        ou_kappa, ou_halflife, ou_mu, ou_sigma_eq, ou_zscore,
+        eg_pvalue, johansen_trace,
+        entry_threshold, exit_threshold
+    )
+    WHERE pf.timestamp       = d.ts::timestamptz
+      AND pf.pair_id         = 'ETHUSDT_BTCUSDT'
+      AND pf.feature_version = '{{version}}'
+    RETURNING 1
+"""
+
+
+def update_kalman_ou_features(rows: list[dict], version: str) -> int:
+    """rows: [{timestamp, kalman_beta, spread_kalman, ou_kappa, ou_halflife,
+               ou_mu, ou_sigma_eq, ou_zscore, eg_pvalue, johansen_trace,
+               entry_threshold, exit_threshold}]"""
+    if not rows:
+        return 0
+    tuples = [
+        (r["timestamp"], *(r.get(c) for c in _KALMAN_OU_COLS))
+        for r in rows
+    ]
+    sql = _KALMAN_OU_UPDATE_SQL_TMPL.replace("{{version}}", version)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            result = execute_values(cur, sql, tuples, fetch=True)
+            return len(result)
