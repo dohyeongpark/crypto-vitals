@@ -79,10 +79,13 @@ def _parse_csv(data: bytes, symbol: str, market_type: str) -> list[dict]:
         if not line or line[0].startswith("open_time"):  # skip header if any
             continue
         try:
-            close_time_ms = int(line[6])
-            # close_time_ms is the exact close timestamp (open_time + 3599999 for 1h).
-            # Add 1 ms so we get the clean hour boundary (e.g. 2023-01-01 01:00:00 UTC).
-            ts = datetime.fromtimestamp((close_time_ms + 1) / 1000.0, tz=timezone.utc)
+            close_time_raw = int(line[6])
+            # Binance Vision uses ms (13-digit) for older data and µs (16-digit) for 2026+.
+            # Adding 1 unit and dividing gives the clean hour boundary in both cases.
+            if close_time_raw > 9_999_999_999_999:  # 16-digit → microseconds
+                ts = datetime.fromtimestamp((close_time_raw + 1) / 1_000_000.0, tz=timezone.utc)
+            else:  # 13-digit → milliseconds
+                ts = datetime.fromtimestamp((close_time_raw + 1) / 1000.0, tz=timezone.utc)
 
             rows.append({
                 "symbol": symbol,
@@ -185,10 +188,10 @@ def main() -> None:
         default_end = (now.year, now.month - 1)
 
     if args.months:
-        em, ey = default_end
-        total = em + (ey - 1) * 12 - (args.months - 1)
+        end_y, end_m = default_end
+        total = end_y * 12 + end_m - (args.months - 1)
         sy, sm = divmod(total - 1, 12)
-        start = (sy + 1, sm + 1)
+        start = (sy, sm + 1)
         end = default_end
     else:
         start = _parse_ym(args.start) if args.start else (now.year - 3, now.month)
