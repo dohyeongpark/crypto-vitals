@@ -32,8 +32,20 @@ def _get_oi(params: dict) -> list[dict]:
     for attempt in range(1, HTTP_MAX_RETRIES + 1):
         try:
             resp = requests.get(_OI_URL, params=params, timeout=HTTP_TIMEOUT)
+            if resp.status_code == 451:
+                # Permanent geo-restriction — Binance blocks futures API from US IPs.
+                # No point retrying; raise immediately so the caller logs and moves on.
+                resp.raise_for_status()
             resp.raise_for_status()
             return resp.json()
+        except requests.exceptions.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 451:
+                raise  # non-retryable
+            delay = HTTP_BACKOFF_BASE * (2 ** attempt)
+            if attempt == HTTP_MAX_RETRIES:
+                raise
+            logger.warning("OI fetch retry %d/%d in %.1fs: %s", attempt, HTTP_MAX_RETRIES, delay, exc)
+            time.sleep(delay)
         except requests.exceptions.RequestException as exc:
             delay = HTTP_BACKOFF_BASE * (2 ** attempt)
             if attempt == HTTP_MAX_RETRIES:
