@@ -39,6 +39,8 @@ CREATE INDEX IF NOT EXISTS market_data_symbol_type_ts
 -- ─────────────────────────────────────────────────────────────────────────────
 -- TABLE 2: open_interest (트랙 B, 매시간 적재)
 -- OI는 소급 불가(Binance 최근 1개월만 제공)이므로 market_data와 분리.
+-- 현재 미사용: us-central1 IP에서 fapi.binance.com HTTP 451 영구 차단.
+-- 스키마 보존 — 향후 ablation 또는 프록시/리전 전환 시 재활성 가능.
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS open_interest (
     symbol         VARCHAR(20)    NOT NULL,

@@ -5,6 +5,11 @@ Fetches /futures/data/openInterestHist (period=1h) every hour and UPSERTs
 into open_interest table. Exceptions are logged and swallowed so the
 scheduler never dies.
 
+STATUS: CURRENTLY DISABLED — Binance fapi.binance.com returns HTTP 451
+(geo-restriction) from us-central1 (US) IP addresses. The docker-compose
+service is commented out. This file is preserved for future ablation
+experiments or proxy/region-change scenarios.
+
 Run:
     python -m src.collectors.oi_scheduler        # foreground (docker service)
 """

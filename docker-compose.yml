@@ -18,21 +18,23 @@ services:
       timeout: 5s
       retries: 5
 
-  oi_scheduler:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: python -m src.collectors.oi_scheduler
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      # docker 네트워크 안에서는 서비스 이름으로 접속 (env_file의 localhost를 덮어씀)
-      DB_HOST: timescaledb
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "5"
+  # [DISABLED] oi_scheduler — Binance fapi.binance.com is permanently geo-blocked
+  # (HTTP 451) from us-central1 US IP addresses. Preserved for future ablation
+  # experiments or proxy/region-change scenarios.
+  # oi_scheduler:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   command: python -m src.collectors.oi_scheduler
+  #   restart: unless-stopped
+  #   env_file: .env
+  #   environment:
+  #     DB_HOST: timescaledb
+  #   depends_on:
+  #     timescaledb:
+  #       condition: service_healthy
+  #   logging:
+  #     driver: json-file
+  #     options:
+  #       max-size: "20m"
+  #       max-file: "5"
