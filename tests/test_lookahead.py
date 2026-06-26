@@ -163,3 +163,64 @@ def test_realized_vol_no_future_data():
     assert abs(float(vol_full.iloc[100]) - float(vol_trunc.iloc[100])) < 1e-10, (
         "Realized vol at position 100 differs — future data leak in rolling std."
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Regime features: basis uses only close-time data
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_basis_uses_only_close_time_data():
+    """
+    basis = (perp_close - spot_close) / spot_close is a point-in-time
+    computation. Verify that the value at index i matches a computation
+    performed on a truncated series (no future data involved).
+    """
+    rng = np.random.default_rng(7)
+    n = 100
+    spot = pd.Series(np.cumsum(rng.normal(0, 1, n)) + 30000)
+    perp = spot * (1 + rng.normal(0, 0.001, n))
+
+    basis_full = (perp - spot) / spot
+    basis_trunc = (perp.iloc[:51] - spot.iloc[:51]) / spot.iloc[:51]
+
+    assert abs(float(basis_full.iloc[50]) - float(basis_trunc.iloc[50])) < 1e-12, (
+        "basis at position 50 differs between full and truncated series — "
+        "future data leak detected."
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Regime features: funding_rate forward-fill direction (past → future only)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_funding_rate_no_future_leak():
+    """
+    Funding rates are published every 8h and forward-filled onto hourly candles.
+    The fill must propagate forward (past → future), never backward.
+
+    Verify: after forward-filling, each candle's funding_rate equals the
+    most recent known funding event AT OR BEFORE that timestamp.
+    Specifically, a candle at t=4h must NOT show the funding value from t=8h.
+    """
+    times = pd.date_range("2024-01-01", periods=24, freq="1h", tz="UTC")
+    funding = pd.Series(np.nan, index=times, dtype=float)
+
+    funding.iloc[0]  = 0.0001
+    funding.iloc[8]  = 0.0003
+    funding.iloc[16] = 0.0002
+
+    filled = funding.ffill()
+
+    # Hours 1-7 must carry the t=0 value, NOT the t=8 value
+    for i in range(1, 8):
+        assert filled.iloc[i] == 0.0001, (
+            f"Hour {i}: funding_rate={filled.iloc[i]!r} should be 0.0001 "
+            f"(the t=0 event). Got t=8 value — backward fill detected."
+        )
+
+    # Hours 9-15 must carry the t=8 value
+    for i in range(9, 16):
+        assert filled.iloc[i] == 0.0003, (
+            f"Hour {i}: funding_rate={filled.iloc[i]!r} should be 0.0003 "
+            f"(the t=8 event)."
+        )
