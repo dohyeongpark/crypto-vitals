@@ -224,11 +224,12 @@ _REGIME_UPDATE_SQL_TMPL = """
     )
     WHERE pf.timestamp       = d.ts::timestamptz
       AND pf.pair_id         = 'ETHUSDT_BTCUSDT'
-      AND pf.feature_version = '{version}'
+      AND pf.feature_version = '{{version}}'
+    RETURNING 1
 """
 
 
-def update_regime_features(rows: list[dict], version: str, page_size: int = 1000) -> int:
+def update_regime_features(rows: list[dict], version: str) -> int:
     """rows: [{timestamp, funding_rate_y, funding_rate_x, funding_spread,
                taker_ratio_y, taker_ratio_x, basis_y, basis_x}]"""
     if not rows:
@@ -237,12 +238,11 @@ def update_regime_features(rows: list[dict], version: str, page_size: int = 1000
         (r["timestamp"], *(r.get(c) for c in _REGIME_COLS))
         for r in rows
     ]
-    sql = _REGIME_UPDATE_SQL_TMPL.format(version=version)
-    # Paginate manually so cur.rowcount is accurate per batch (not just last page).
-    total = 0
+    # Format version into SQL (internal config value, not user input)
+    sql = _REGIME_UPDATE_SQL_TMPL.replace("{{version}}", version)
     with get_conn() as conn:
         with conn.cursor() as cur:
-            for i in range(0, len(tuples), page_size):
-                execute_values(cur, sql, tuples[i : i + page_size])
-                total += cur.rowcount
-    return total
+            # fetch=True accumulates RETURNING rows across all internal pages,
+            # giving an accurate total count regardless of page_size.
+            result = execute_values(cur, sql, tuples, fetch=True)
+            return len(result)
