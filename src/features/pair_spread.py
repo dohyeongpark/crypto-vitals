@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import FEATURE_VERSION, FEATURE_WINDOW_H, INTERVAL
-from src.db import get_conn, upsert_pair_features
+from src.db import get_engine, upsert_pair_features
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +38,7 @@ def _fetch_spot_closes() -> pd.DataFrame:
           AND  interval    = '1h'
         ORDER  BY timestamp
     """
-    with get_conn() as conn:
-        df = pd.read_sql_query(sql, conn, parse_dates=["timestamp"])
+    df = pd.read_sql_query(sql, get_engine(), parse_dates=["timestamp"])
 
     # Pivot to wide format: columns = [BTCUSDT, ETHUSDT]
     wide = df.pivot(index="timestamp", columns="symbol", values="close").sort_index()

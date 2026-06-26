@@ -1,6 +1,10 @@
 """
 DB connection pool and UPSERT helpers.
 All SQL goes through this module — no raw psycopg2 elsewhere.
+
+Connection strategy:
+  get_conn()   — psycopg2 ThreadedConnectionPool, used for all writes (UPSERT/UPDATE)
+  get_engine() — SQLAlchemy engine, used for reads via pd.read_sql_query
 """
 import logging
 from contextlib import contextmanager
@@ -9,12 +13,14 @@ from typing import Iterator
 import psycopg2
 from psycopg2 import pool as pg_pool
 from psycopg2.extras import execute_values
+from sqlalchemy import create_engine as _sa_create_engine
 
 from src.config import DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
 
 logger = logging.getLogger(__name__)
 
 _pool: pg_pool.ThreadedConnectionPool | None = None
+_engine = None
 
 
 def _get_pool() -> pg_pool.ThreadedConnectionPool:
@@ -31,6 +37,15 @@ def _get_pool() -> pg_pool.ThreadedConnectionPool:
         )
         logger.info("DB pool created (%s:%s/%s)", DB_HOST, DB_PORT, DB_NAME)
     return _pool
+
+
+def get_engine():
+    """SQLAlchemy engine for pd.read_sql_query (read-only analytics)."""
+    global _engine
+    if _engine is None:
+        url = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+        _engine = _sa_create_engine(url, pool_pre_ping=True)
+    return _engine
 
 
 @contextmanager
@@ -107,6 +122,7 @@ _PAIR_FEATURES_SQL = f"""
     INSERT INTO pair_features ({", ".join(_PAIR_FEATURES_COLS)})
     VALUES %s
     ON CONFLICT (pair_id, interval, timestamp, feature_version) DO NOTHING
+    RETURNING 1
 """
 
 
@@ -116,8 +132,10 @@ def upsert_pair_features(rows: list[dict]) -> int:
     tuples = [tuple(r.get(c) for c in _PAIR_FEATURES_COLS) for r in rows]
     with get_conn() as conn:
         with conn.cursor() as cur:
-            execute_values(cur, _PAIR_FEATURES_SQL, tuples)
-            return cur.rowcount
+            # fetch=True collects RETURNING rows; len() gives actual insert count
+            # (ON CONFLICT DO NOTHING skips conflicts, RETURNING omits them)
+            result = execute_values(cur, _PAIR_FEATURES_SQL, tuples, fetch=True)
+            return len(result)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -176,4 +194,51 @@ def update_realized_vol(rows: list[dict]) -> int:
                 cur, _VOL_UPDATE_SQL, tuples,
                 template="(%s, %s, %s, %s::timestamptz, %s::numeric)"
             )
+            return cur.rowcount
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# regime features UPDATE (batch-fill new columns on existing pair_features rows)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_REGIME_COLS = (
+    "funding_rate_y", "funding_rate_x", "funding_spread",
+    "taker_ratio_y", "taker_ratio_x",
+    "basis_y", "basis_x",
+)
+
+_REGIME_UPDATE_SQL_TMPL = """
+    UPDATE pair_features AS pf
+    SET funding_rate_y = d.funding_rate_y::numeric,
+        funding_rate_x = d.funding_rate_x::numeric,
+        funding_spread = d.funding_spread::numeric,
+        taker_ratio_y  = d.taker_ratio_y::numeric,
+        taker_ratio_x  = d.taker_ratio_x::numeric,
+        basis_y        = d.basis_y::numeric,
+        basis_x        = d.basis_x::numeric
+    FROM (VALUES %s) AS d(
+        ts,
+        funding_rate_y, funding_rate_x, funding_spread,
+        taker_ratio_y, taker_ratio_x,
+        basis_y, basis_x
+    )
+    WHERE pf.timestamp       = d.ts::timestamptz
+      AND pf.pair_id         = 'ETHUSDT_BTCUSDT'
+      AND pf.feature_version = '{version}'
+"""
+
+
+def update_regime_features(rows: list[dict], version: str) -> int:
+    """rows: [{timestamp, funding_rate_y, funding_rate_x, funding_spread,
+               taker_ratio_y, taker_ratio_x, basis_y, basis_x}]"""
+    if not rows:
+        return 0
+    tuples = [
+        (r["timestamp"], *(r.get(c) for c in _REGIME_COLS))
+        for r in rows
+    ]
+    sql = _REGIME_UPDATE_SQL_TMPL.format(version=version)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            execute_values(cur, sql, tuples)
             return cur.rowcount

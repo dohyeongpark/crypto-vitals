@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import FEATURE_WINDOW_H, INTERVAL, SYMBOLS
-from src.db import get_conn, update_realized_vol
+from src.db import get_conn, get_engine, update_realized_vol
 
 logger = logging.getLogger(__name__)
 
@@ -25,14 +25,16 @@ def _fetch_closes(symbol: str, market_type: str) -> pd.DataFrame:
     sql = """
         SELECT timestamp, close
         FROM   market_data
-        WHERE  symbol      = %s
-          AND  market_type = %s
+        WHERE  symbol      = %(symbol)s
+          AND  market_type = %(market_type)s
           AND  interval    = '1h'
         ORDER  BY timestamp
     """
-    with get_conn() as conn:
-        df = pd.read_sql_query(sql, conn, params=(symbol, market_type), parse_dates=["timestamp"])
-    return df
+    return pd.read_sql_query(
+        sql, get_engine(),
+        params={"symbol": symbol, "market_type": market_type},
+        parse_dates=["timestamp"],
+    )
 
 
 def compute_and_store(symbol: str, market_type: str, window: int) -> int:

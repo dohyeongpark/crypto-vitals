@@ -17,7 +17,7 @@ from typing import NamedTuple
 import pandas as pd
 
 from src.config import INTERVAL, SYMBOLS
-from src.db import get_conn
+from src.db import get_engine
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +37,16 @@ def _fetch_timestamps(symbol: str, market_type: str) -> pd.DataFrame:
     sql = """
         SELECT timestamp
         FROM   market_data
-        WHERE  symbol      = %s
-          AND  market_type = %s
+        WHERE  symbol      = %(symbol)s
+          AND  market_type = %(market_type)s
           AND  interval    = '1h'
         ORDER  BY timestamp
     """
-    with get_conn() as conn:
-        return pd.read_sql_query(sql, conn, params=(symbol, market_type), parse_dates=["timestamp"])
+    return pd.read_sql_query(
+        sql, get_engine(),
+        params={"symbol": symbol, "market_type": market_type},
+        parse_dates=["timestamp"],
+    )
 
 
 def check(symbol: str, market_type: str) -> CoverageReport:
