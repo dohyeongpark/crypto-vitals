@@ -111,8 +111,6 @@ resource "google_billing_budget" "statarb" {
     spend_basis       = "FORECASTED_SPEND"
   }
 
-  # Emails billing account administrators by default.
-  all_updates_rule {
-    disable_default_iam_recipients = false
-  }
+  # GCP sends email to billing account admins automatically when thresholds
+  # are crossed. No pubsub/monitoring channel needed for basic email alerts.
 }
