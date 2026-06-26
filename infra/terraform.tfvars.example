@@ -1,0 +1,23 @@
+# terraform.tfvars.example — 실제 값을 채워 terraform.tfvars 로 복사하세요.
+# terraform.tfvars 는 .gitignore 에 포함돼 있어 커밋되지 않습니다.
+
+project_id         = "your-gcp-project-id"
+billing_account_id = "XXXXXX-XXXXXX-XXXXXX"   # GCP 콘솔 > 청구 > 계정 관리
+
+# 리전은 반드시 US 유지 (무료 등급): us-central1 | us-west1 | us-east1
+region      = "us-central1"
+zone_suffix = "a"
+
+# VM / 디스크 (합계 ≤ 30 GB 이면 무료 등급 범위)
+machine_type  = "e2-micro"
+boot_disk_gb  = 15
+data_disk_gb  = 15
+
+# SSH 허용 CIDR — 본인 IP로 좁히는 것을 강력 권장 (예: "1.2.3.4/32")
+allowed_ssh_cidr = "0.0.0.0/0"
+
+# 고정 IP (false = 동적, 무료 / true = 정적, 월 ~$1.5)
+use_static_ip = false
+
+# 예산 알림 — 이 금액 초과 시 청구 계정 관리자 이메일 발송
+budget_amount_usd = 10
