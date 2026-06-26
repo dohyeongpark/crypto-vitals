@@ -1,7 +1,7 @@
 # crypto-vitals — BTC/ETH Stat Arb Data Pipeline (Phase 1)
 
 BTC/ETH 공적분 기반 평균회귀 신호를 위한 GCP 데이터 인프라.  
-TimescaleDB + 24시간 OI 수집기 + 과거 3년 OHLCV 적재 파이프라인.
+TimescaleDB + 과거 3년 OHLCV + 레짐 피처(basis / taker ratio / funding spread) 적재 파이프라인.
 
 ---
 
@@ -25,18 +25,20 @@ TimescaleDB + 24시간 OI 수집기 + 과거 3년 OHLCV 적재 파이프라인.
 ## 아키텍처
 
 ```
-[Binance Vision / FAPI]
+[Binance Vision CDN]
         │
   ┌─────▼──────────────────────────────────┐
   │  GCP e2-micro VM (us-central1)          │
   │                                         │
   │  docker-compose                         │
-  │   ├── TimescaleDB (PostgreSQL 16)       │
-  │   │     /data/timescaledb (분리 디스크)  │
-  │   └── oi_scheduler (APScheduler)        │
-  │         └── 매 정시:05 OI UPSERT        │
+  │   └── TimescaleDB (PostgreSQL 16)       │
+  │         /data/timescaledb (분리 디스크)  │
   └─────────────────────────────────────────┘
 ```
+
+> **OI 수집기 비활성**: us-central1(미국 IP)에서 Binance 선물 API가 HTTP 451로 영구 차단됨.
+> `oi_scheduler` 서비스는 `docker-compose.yml`에 주석 처리되어 있으며, 향후 ablation/프록시 시 재활성 가능.
+> 레짐 피처(basis, taker_ratio, funding_spread)로 OI 정보를 대체.
 
 **레이어 분리**: Terraform = GCP 인프라만. 앱 = VM 안에서 docker-compose.
 
@@ -117,13 +119,11 @@ cp .env.example .env
 # .env 편집: DB_PASSWORD 등 설정
 ```
 
-TimescaleDB + OI 스케줄러 기동:
+TimescaleDB 기동:
 
 ```bash
 docker compose up -d timescaledb
 docker compose logs -f timescaledb   # healthy 확인
-docker compose up -d oi_scheduler
-docker compose logs -f oi_scheduler
 ```
 
 ---
@@ -161,19 +161,19 @@ python -m src.features.volatility
 
 # A-5: 페어 스프레드 / z-score
 python -m src.features.pair_spread
+
+# A-6: 레짐 피처 (basis / taker_ratio / funding_spread)
+python -m src.features.regime
 ```
 
 ---
 
-## 4. Track B — OI 상시 적재 확인
+## 4. Track B — OI 수집 (현재 비활성)
 
-```bash
-docker compose logs -f oi_scheduler
-
-# DB에서 직접 확인
-docker exec -it <timescaledb_container> psql -U postgres -d cryptodb \
-  -c "SELECT symbol, COUNT(*), MAX(timestamp) FROM open_interest GROUP BY 1;"
-```
+> us-central1 IP에서 Binance 선물 API(`fapi.binance.com`)가 HTTP 451로 영구 차단됨.
+> `oi_scheduler` 서비스는 비활성 상태. `open_interest` 테이블 스키마는 보존.
+>
+> 대체 레짐 피처: `basis`, `taker_ratio`, `funding_spread` — Track A-6으로 제공.
 
 ---
 
@@ -184,9 +184,11 @@ pip install pytest
 pytest tests/test_lookahead.py -v
 ```
 
-룩어헤드 검증 내용:
+룩어헤드 검증 내용 (7개 테스트):
 - `timestamp = close_time` (open_time 아님) 확인
 - 롤링 β, z-score, 실현변동성이 미래 데이터를 참조하지 않음
+- `basis` 계산이 동시각 spot/perp 값만 사용
+- `funding_rate` forward-fill이 과거→미래 방향으로만 전파
 
 ---
 
@@ -194,9 +196,10 @@ pytest tests/test_lookahead.py -v
 
 **이 프로젝트는 API 키가 필요 없습니다.**  
 사용하는 모든 엔드포인트는 공개(public) 데이터입니다:
-- `data.binance.vision` — 과거 klines ZIP (인증 불필요)
-- `/fapi/v1/fundingRate` — 공개 REST (인증 불필요)
-- `/futures/data/openInterestHist` — 공개 REST (인증 불필요)
+- `data.binance.vision` — 과거 klines ZIP, 월별 펀딩비 ZIP (인증 불필요, 지역 제한 없음)
+
+> `/fapi/*`, `/futures/data/*` 엔드포인트는 us-central1 IP에서 HTTP 451 차단.
+> klines·펀딩비 모두 CDN에서 수집하므로 API 키·프록시 모두 불필요.
 
 ---
 
@@ -226,25 +229,28 @@ terraform destroy
 ```
 .
 ├── infra/                  # Terraform (GCP 인프라)
-├── db/schema.sql           # TimescaleDB 테이블 정의
-├── docker-compose.yml      # TimescaleDB + oi_scheduler
+├── db/
+│   ├── schema.sql          # TimescaleDB 테이블 정의
+│   └── migration_v02.sql   # v0.2-regime 컬럼 추가 마이그레이션
+├── docker-compose.yml      # TimescaleDB (oi_scheduler는 비활성 주석)
 ├── Dockerfile              # Python app 컨테이너
 ├── .env.example
 ├── requirements.txt
 ├── src/
 │   ├── config.py
-│   ├── db.py               # 연결 풀, UPSERT 헬퍼
+│   ├── db.py               # 연결 풀, UPSERT/UPDATE 헬퍼, SQLAlchemy engine
 │   ├── collectors/
-│   │   ├── klines_bulk.py  # Track A-1
-│   │   ├── funding.py      # Track A-2
-│   │   └── oi_scheduler.py # Track B (24시간 상시)
+│   │   ├── klines_bulk.py  # Track A-1: 과거 OHLCV (CDN)
+│   │   ├── funding.py      # Track A-2: 펀딩비 (CDN)
+│   │   └── oi_scheduler.py # Track B: OI (현재 비활성 — HTTP 451)
 │   ├── features/
-│   │   ├── integrity.py    # Track A-3
-│   │   ├── volatility.py   # Track A-4
-│   │   └── pair_spread.py  # Track A-5
-│   └── pipeline.py         # Track A 오케스트레이션
+│   │   ├── integrity.py    # Track A-3: 결측봉 탐지
+│   │   ├── volatility.py   # Track A-4: 실현변동성
+│   │   ├── pair_spread.py  # Track A-5: 롤링 OLS β, MAD z-score
+│   │   └── regime.py       # Track A-6: basis / taker_ratio / funding_spread
+│   └── pipeline.py         # Track A 오케스트레이션 (6단계)
 └── tests/
-    └── test_lookahead.py   # 룩어헤드 없음 검증
+    └── test_lookahead.py   # 룩어헤드 없음 검증 (7개 테스트)
 ```
 
 ---
@@ -253,7 +259,7 @@ terraform destroy
 
 | Phase | 내용 | 상태 |
 |-------|------|------|
-| 1 | GCP 인프라 + 데이터 수집 | ✅ 현재 |
-| 2 | 공적분 검정, 칼만 필터 β, OU 파라미터 | 예정 |
-| 3 | Triple-barrier 라벨링, ML 메타레이블 | 예정 |
-| 4 | 백테스트, 거래비용 모델 | 예정 |
+| 1 | GCP 인프라 + 3년 OHLCV + 레짐 피처(basis/taker/funding) | ✅ 완료 |
+| 2 | 칼만 필터 동적 β + 공적분 검정(EG/Johansen) + OU 파라미터(θ, 반감기) + 진입·청산 임계값 | 예정 |
+| 3 | Triple-barrier 라벨링 + ML 메타레이블(LightGBM) | 예정 |
+| 4 | Purged CV / Deflated Sharpe 검증 + 거래비용 모델 백테스트 | 예정 |
