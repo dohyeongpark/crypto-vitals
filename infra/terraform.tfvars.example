@@ -2,6 +2,7 @@
 # terraform.tfvars 는 .gitignore 에 포함돼 있어 커밋되지 않습니다.
 
 project_id         = "your-gcp-project-id"
+project_number     = "000000000000"            # gcloud projects describe <id> --format=value(projectNumber)
 billing_account_id = "XXXXXX-XXXXXX-XXXXXX"   # GCP 콘솔 > 청구 > 계정 관리
 
 # 리전은 반드시 US 유지 (무료 등급): us-central1 | us-west1 | us-east1
@@ -20,4 +21,6 @@ allowed_ssh_cidr = "0.0.0.0/0"
 use_static_ip = false
 
 # 예산 알림 — 이 금액 초과 시 청구 계정 관리자 이메일 발송
-budget_amount_usd = 10
+# 청구 계정 통화에 맞춰 설정 (gcloud billing budgets create 시 currencyCode 확인)
+budget_amount        = 15000   # KRW 기준 예시 (≈ $10)
+budget_currency_code = "KRW"   # 또는 "USD" 등

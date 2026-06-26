@@ -1,5 +1,10 @@
 variable "project_id" {
-  description = "GCP 프로젝트 ID"
+  description = "GCP 프로젝트 ID (예: parkdh0121)"
+  type        = string
+}
+
+variable "project_number" {
+  description = "GCP 프로젝트 번호 (숫자). billing budget filter에 필요. gcloud projects describe <id> --format=value(projectNumber)"
   type        = string
 }
 
@@ -56,8 +61,14 @@ variable "allowed_ssh_cidr" {
 }
 
 # ── Budget ────────────────────────────────────────────────────────────────────
-variable "budget_amount_usd" {
-  description = "월간 예산 상한 (USD). 초과 시 청구 계정 관리자에게 이메일 알림."
+variable "budget_amount" {
+  description = "월간 예산 상한 (budget_currency_code 단위). 초과 시 청구 계정 관리자에게 이메일 알림."
   type        = number
-  default     = 10
+  default     = 15000
+}
+
+variable "budget_currency_code" {
+  description = "청구 계정의 통화 코드. gcloud billing budgets create 시 표시되는 currencyCode와 일치해야 함."
+  type        = string
+  default     = "KRW"
 }

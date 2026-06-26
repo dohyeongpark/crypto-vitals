@@ -9,8 +9,12 @@ terraform {
 }
 
 provider "google" {
-  project = var.project_id
-  region  = var.region
+  project               = var.project_id
+  region                = var.region
+  # Required for billingbudgets.googleapis.com with ADC user credentials.
+  # Routes API quota through our project instead of the default ADC project.
+  user_project_override = true
+  billing_project       = var.project_id
 }
 
 # ── Static IP (optional) ─────────────────────────────────────────────────────
@@ -89,13 +93,14 @@ resource "google_billing_budget" "statarb" {
   display_name    = "statarb-monthly-budget"
 
   budget_filter {
-    projects = ["projects/${var.project_id}"]
+    # billing budget API requires project number, not project ID string
+    projects = ["projects/${var.project_number}"]
   }
 
   amount {
     specified_amount {
-      currency_code = "USD"
-      units         = tostring(var.budget_amount_usd)
+      currency_code = var.budget_currency_code
+      units         = tostring(var.budget_amount)
     }
   }
 
