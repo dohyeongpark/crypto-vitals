@@ -24,6 +24,16 @@ INTERVAL = "1h"
 FEATURE_WINDOW_H = int(os.getenv("FEATURE_WINDOW_H", "168"))  # 7일
 FEATURE_VERSION = os.getenv("FEATURE_VERSION", "v0.3-kalman")
 
+# ── Phase 3: Triple-barrier ───────────────────────────────────────────────────
+TB_ENTRY_Z    = float(os.getenv("TB_ENTRY_Z",   "2.0"))
+TB_EXIT_Z     = float(os.getenv("TB_EXIT_Z",    "0.5"))
+TB_STOP_Z     = float(os.getenv("TB_STOP_Z",    "3.0"))
+TB_MAX_HOLD_H = int(os.getenv("TB_MAX_HOLD_H",  "12"))   # max hold 12h ≈ 6.7 half-lives
+LABEL_VERSION = os.getenv("LABEL_VERSION",       "v1.0-tb")
+
+# ── Phase 3: Meta-labeling ────────────────────────────────────────────────────
+META_THRESHOLD = float(os.getenv("META_THRESHOLD", "0.5"))
+
 # ── HTTP ──────────────────────────────────────────────────────────────────────
 HTTP_TIMEOUT = 30
 HTTP_MAX_RETRIES = 5
