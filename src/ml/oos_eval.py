@@ -91,12 +91,12 @@ def oos_eval(
         return {"n_train": len(train_df), "n_test": 0}
 
     X_train, feat_names = build_feature_matrix(train_df)
-    train_df = train_df.iloc[X_train.index].reset_index(drop=True)
+    train_df = train_df.loc[X_train.index].reset_index(drop=True)
     X_train = X_train.reset_index(drop=True)
     y_train = (train_df["tb_label"] == 1).astype(int)
 
     X_test, _ = build_feature_matrix(test_df)
-    test_df = test_df.iloc[X_test.index].reset_index(drop=True)
+    test_df = test_df.loc[X_test.index].reset_index(drop=True)
     X_test = X_test.reset_index(drop=True)
     y_test = (test_df["tb_label"] == 1).astype(int)
 
