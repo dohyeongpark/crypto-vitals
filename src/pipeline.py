@@ -2,11 +2,14 @@
 Track A orchestration: one-shot historical data pipeline.
 
 Steps (in order):
-  1. klines_bulk  — download OHLCV from data.binance.vision
-  2. funding      — fetch and forward-fill funding rates onto perp candles
-  3. integrity    — detect missing candles, abort if critical
-  4. volatility   — compute realized vol
-  5. pair_spread  — compute spread / z-score features
+  1. klines_bulk       — download OHLCV from data.binance.vision
+  2. funding           — fetch and forward-fill funding rates onto perp candles
+  3. integrity         — detect missing candles, abort if critical
+  4. volatility        — compute realized vol
+  5. pair_spread       — compute spread / z-score features
+  6. regime            — basis / taker / funding regime features
+  7. kalman_ou         — Kalman β / OU params / cointegration tests
+  8. triple_barrier    — triple-barrier ML labels from ou_zscore signal
 
 Usage:
     # Quick end-to-end test with 1 month of data
@@ -31,7 +34,8 @@ from src.features.volatility import compute_and_store as vol_compute
 from src.features.pair_spread import compute_and_store as spread_compute
 from src.features.regime import compute_and_store as regime_compute
 from src.features.kalman_ou import compute_and_store as kalman_ou_compute
-from src.config import SYMBOLS, FEATURE_WINDOW_H, FEATURE_VERSION
+from src.labels.triple_barrier import compute_and_store as label_compute
+from src.config import SYMBOLS, FEATURE_WINDOW_H, FEATURE_VERSION, LABEL_VERSION, TB_STOP_Z, TB_MAX_HOLD_H
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +67,12 @@ def main() -> None:
                         help="Kalman process noise variance")
     parser.add_argument("--kalman-R", type=float, default=1e-3, dest="kalman_R",
                         help="Kalman observation noise variance")
+    parser.add_argument("--skip-labels", action="store_true")
+    parser.add_argument("--label-version", default=LABEL_VERSION, dest="label_version")
+    parser.add_argument("--stop-z", type=float, default=TB_STOP_Z, dest="stop_z",
+                        help="OU z-score stop barrier threshold")
+    parser.add_argument("--max-hold-h", type=int, default=TB_MAX_HOLD_H, dest="max_hold_h",
+                        help="Maximum holding period in bars (hours)")
     args = parser.parse_args()
 
     now = datetime.now(timezone.utc)
@@ -83,61 +93,71 @@ def main() -> None:
 
     # ── Step 1: klines ────────────────────────────────────────────────────────
     if not args.skip_klines:
-        logger.info("=== Step 1/7: klines download ===")
+        logger.info("=== Step 1/8: klines download ===")
         klines_download(args.symbols, args.market, start, end)
     else:
-        logger.info("=== Step 1/7: klines SKIPPED ===")
+        logger.info("=== Step 1/8: klines SKIPPED ===")
 
     # ── Step 2: funding rates ─────────────────────────────────────────────────
     if not args.skip_funding:
-        logger.info("=== Step 2/7: funding rates ===")
+        logger.info("=== Step 2/8: funding rates ===")
         start_dt = datetime(start[0], start[1], 1, tzinfo=timezone.utc)
         end_dt = datetime(end[0], end[1], 28, tzinfo=timezone.utc)  # safe last day
         perp_symbols = [s for s in args.symbols]
         funding_run(perp_symbols, start_dt, end_dt)
     else:
-        logger.info("=== Step 2/7: funding SKIPPED ===")
+        logger.info("=== Step 2/8: funding SKIPPED ===")
 
     # ── Step 3: integrity check ───────────────────────────────────────────────
     if not args.skip_integrity:
-        logger.info("=== Step 3/7: integrity check ===")
+        logger.info("=== Step 3/8: integrity check ===")
         reports = [integrity_check(s, m) for s in args.symbols for m in args.market]
         print_summary(reports)
         n_gaps = sum(r.missing_count for r in reports)
         if n_gaps > 0:
             logger.warning("%d missing candles detected. Continuing (check logs above).", n_gaps)
     else:
-        logger.info("=== Step 3/7: integrity SKIPPED ===")
+        logger.info("=== Step 3/8: integrity SKIPPED ===")
 
     # ── Step 4: realized volatility ───────────────────────────────────────────
     if not args.skip_vol:
-        logger.info("=== Step 4/7: realized volatility ===")
+        logger.info("=== Step 4/8: realized volatility ===")
         for symbol in args.symbols:
             for market_type in args.market:
                 vol_compute(symbol, market_type, args.window)
     else:
-        logger.info("=== Step 4/7: vol SKIPPED ===")
+        logger.info("=== Step 4/8: vol SKIPPED ===")
 
     # ── Step 5: pair features ─────────────────────────────────────────────────
     if not args.skip_spread:
-        logger.info("=== Step 5/7: pair spread / z-score ===")
+        logger.info("=== Step 5/8: pair spread / z-score ===")
         spread_compute(args.window, args.version)
     else:
-        logger.info("=== Step 5/7: spread SKIPPED ===")
+        logger.info("=== Step 5/8: spread SKIPPED ===")
 
     # ── Step 6: regime features ───────────────────────────────────────────────
     if not args.skip_regime:
-        logger.info("=== Step 6/7: regime features ===")
+        logger.info("=== Step 6/8: regime features ===")
         regime_compute(args.window, args.version)
     else:
-        logger.info("=== Step 6/7: regime SKIPPED ===")
+        logger.info("=== Step 6/8: regime SKIPPED ===")
 
     # ── Step 7: Kalman β / OU params / cointegration ──────────────────────────
     if not args.skip_kalman:
-        logger.info("=== Step 7/7: Kalman β / OU params / cointegration ===")
+        logger.info("=== Step 7/8: Kalman β / OU params / cointegration ===")
         kalman_ou_compute(args.window, args.version, Q=args.kalman_Q, R=args.kalman_R)
     else:
-        logger.info("=== Step 7/7: kalman SKIPPED ===")
+        logger.info("=== Step 7/8: kalman SKIPPED ===")
+
+    # ── Step 8: Triple-barrier ML labels ──────────────────────────────────────
+    if not args.skip_labels:
+        logger.info("=== Step 8/8: triple-barrier labeling ===")
+        label_compute(
+            args.version, args.label_version,
+            stop_z=args.stop_z, max_hold_h=args.max_hold_h,
+        )
+    else:
+        logger.info("=== Step 8/8: labels SKIPPED ===")
 
     logger.info("Pipeline complete.")
 
