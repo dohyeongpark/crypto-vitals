@@ -301,3 +301,97 @@ def update_kalman_ou_features(rows: list[dict], version: str) -> int:
         with conn.cursor() as cur:
             result = execute_values(cur, sql, tuples, fetch=True)
             return len(result)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 3: ml_labels UPSERT + meta-prediction UPDATE + training data load
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ML_LABELS_COLS = (
+    "pair_id", "interval", "entry_timestamp", "feature_version", "label_version",
+    "entry_side", "entry_zscore",
+    "exit_timestamp", "hold_bars", "tb_label",
+    "delta_zscore", "spread_return",
+    "stop_z", "max_hold_h",
+)
+
+_ML_LABELS_SQL = f"""
+    INSERT INTO ml_labels ({", ".join(_ML_LABELS_COLS)})
+    VALUES %s
+    ON CONFLICT (pair_id, interval, entry_timestamp, feature_version, label_version)
+    DO NOTHING
+    RETURNING 1
+"""
+
+
+def upsert_ml_labels(rows: list[dict]) -> int:
+    """Insert triple-barrier label rows; skips duplicates. Returns inserted count."""
+    if not rows:
+        return 0
+    tuples = [tuple(r.get(c) for c in _ML_LABELS_COLS) for r in rows]
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            result = execute_values(cur, _ML_LABELS_SQL, tuples, fetch=True)
+            return len(result)
+
+
+_META_UPDATE_SQL_TMPL = """
+    UPDATE ml_labels
+    SET meta_prob  = d.meta_prob::numeric,
+        meta_label = d.meta_label::smallint
+    FROM (VALUES %s) AS d(ts, meta_prob, meta_label)
+    WHERE ml_labels.entry_timestamp  = d.ts::timestamptz
+      AND ml_labels.pair_id          = 'ETHUSDT_BTCUSDT'
+      AND ml_labels.feature_version  = '{{fv}}'
+      AND ml_labels.label_version    = '{{lv}}'
+    RETURNING 1
+"""
+
+
+def update_meta_predictions(rows: list[dict], feature_version: str, label_version: str) -> int:
+    """Set meta_prob / meta_label on existing ml_labels rows. Returns updated count."""
+    if not rows:
+        return 0
+    tuples = [(r["entry_timestamp"], r["meta_prob"], r["meta_label"]) for r in rows]
+    sql = (
+        _META_UPDATE_SQL_TMPL
+        .replace("{{fv}}", feature_version)
+        .replace("{{lv}}", label_version)
+    )
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            result = execute_values(cur, sql, tuples, fetch=True)
+            return len(result)
+
+
+def load_labels_for_training(feature_version: str, label_version: str):
+    """
+    JOIN ml_labels with pair_features on entry_timestamp to build training data.
+    All features are from entry_timestamp — no lookahead.
+    Returns a pandas DataFrame.
+    """
+    import pandas as pd
+
+    sql = """
+        SELECT
+            ml.entry_timestamp, ml.exit_timestamp, ml.tb_label,
+            ml.entry_side, ml.entry_zscore, ml.hold_bars,
+            ml.delta_zscore, ml.spread_return,
+            pf.ou_zscore, pf.ou_halflife, pf.ou_kappa, pf.ou_sigma_eq, pf.ou_mu,
+            pf.eg_pvalue, pf.johansen_trace,
+            pf.basis_y, pf.basis_x,
+            pf.taker_ratio_y, pf.taker_ratio_x,
+            pf.funding_spread, pf.spread_std, pf.spread_kalman
+        FROM ml_labels ml
+        JOIN pair_features pf
+          ON pf.timestamp       = ml.entry_timestamp
+         AND pf.feature_version = ml.feature_version
+        WHERE ml.feature_version = %(fv)s
+          AND ml.label_version   = %(lv)s
+        ORDER BY ml.entry_timestamp
+    """
+    return pd.read_sql_query(
+        sql, get_engine(),
+        params={"fv": feature_version, "lv": label_version},
+        parse_dates=["entry_timestamp", "exit_timestamp"],
+    )
