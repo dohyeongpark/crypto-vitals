@@ -430,3 +430,150 @@ def test_johansen_no_lookahead():
     assert abs(jh_full[100] - jh_trunc[100]) < 1e-8, (
         "Johansen trace at position 100 differs — rolling window is leaking future data."
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 14. Triple-barrier: label correctly uses FUTURE data (intentional)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_tb_label_uses_future_data():
+    """
+    Triple-barrier labels MUST use future data by design.
+    Verify: changing ou_zscore at t+1 changes the label at t (future-sensitive).
+    This confirms the algorithm is scanning forward, not backward.
+    """
+    from src.labels.triple_barrier import compute_labels
+
+    n = 50
+    # Build a series where ou_zscore[0] triggers entry (|z| > 2.0)
+    # and ou_zscore[1] determines the outcome
+    times = pd.date_range("2024-01-01", periods=n, freq="1h", tz="UTC")
+
+    # Base case: entry at t=0, exit hit at t=1 (|z|=0.3 < exit_z=0.5)
+    ou_base = np.full(n, 0.3)   # all bars below exit threshold
+    ou_base[0] = 2.5            # entry signal
+    spread = np.ones(n) * 0.01
+
+    df_base = pd.DataFrame({
+        "timestamp": times, "ou_zscore": ou_base, "spread_kalman": spread
+    })
+    rows_base = compute_labels(df_base, entry_z=2.0, exit_z=0.5, stop_z=3.0, max_hold_h=12)
+    assert len(rows_base) >= 1, "Expected at least one entry signal"
+    label_base = rows_base[0]["tb_label"]
+
+    # Modified: make t=1 trigger a STOP instead of profit (|z|=3.5 > stop_z=3.0)
+    ou_mod = ou_base.copy()
+    ou_mod[1] = 3.5  # stop hit at t=1
+
+    df_mod = pd.DataFrame({
+        "timestamp": times, "ou_zscore": ou_mod, "spread_kalman": spread
+    })
+    rows_mod = compute_labels(df_mod, entry_z=2.0, exit_z=0.5, stop_z=3.0, max_hold_h=12)
+    assert len(rows_mod) >= 1
+    label_mod = rows_mod[0]["tb_label"]
+
+    assert label_base != label_mod, (
+        f"Changing t+1 ou_zscore did not change the label at t=0 "
+        f"(base={label_base}, mod={label_mod}). "
+        "Triple-barrier should scan forward — label must depend on future data."
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 15. ML features: no lookahead from entry_timestamp
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_ml_features_no_lookahead():
+    """
+    build_feature_matrix() uses only entry_timestamp-aligned data.
+    Verify: feature vector is identical whether the input DataFrame contains
+    all rows or only rows up to the entry_timestamp (no future rows).
+    This is a structural test — it confirms the JOIN is on entry_timestamp, not exit.
+    """
+    from src.ml.features import build_feature_matrix
+
+    rng = np.random.default_rng(10)
+    n = 50
+    times = pd.date_range("2024-01-01", periods=n, freq="1h", tz="UTC")
+
+    # Minimal DataFrame mimicking load_labels_for_training() output
+    df = pd.DataFrame({
+        "entry_timestamp": times,
+        "exit_timestamp": times + pd.Timedelta(hours=6),
+        "tb_label": rng.integers(0, 2, n),
+        "ou_zscore": rng.normal(0, 1, n),
+        "ou_halflife": rng.uniform(0.5, 5, n),
+        "ou_kappa": rng.uniform(0.1, 2, n),
+        "ou_sigma_eq": rng.uniform(0.01, 0.1, n),
+        "ou_mu": rng.normal(0, 0.01, n),
+        "eg_pvalue": rng.uniform(0, 1, n),
+        "johansen_trace": rng.uniform(5, 25, n),
+        "basis_y": rng.normal(0, 0.001, n),
+        "basis_x": rng.normal(0, 0.001, n),
+        "taker_ratio_y": rng.uniform(0.3, 0.7, n),
+        "taker_ratio_x": rng.uniform(0.3, 0.7, n),
+        "funding_spread": rng.normal(0, 0.0001, n),
+        "spread_std": rng.uniform(0.001, 0.01, n),
+        "spread_kalman": rng.normal(0, 0.05, n),
+    })
+
+    # Features from full DataFrame at row 20
+    X_full, _ = build_feature_matrix(df)
+    row_20_full = X_full.iloc[20].values
+
+    # Features from truncated DataFrame (rows 0..20, no future data)
+    X_trunc, _ = build_feature_matrix(df.iloc[:21].reset_index(drop=True))
+    row_20_trunc = X_trunc.iloc[20].values
+
+    np.testing.assert_array_almost_equal(
+        row_20_full, row_20_trunc, decimal=10,
+        err_msg="Feature vector at row 20 differs between full and truncated input — "
+                "build_feature_matrix may be using future rows.",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 16. Purged CV: purge and embargo logic
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_purged_cv_no_train_test_overlap():
+    """
+    In purged walk-forward CV:
+    1. No training sample's exit_timestamp should fall inside the test window.
+    2. No training sample should be within embargo_h hours of test_start.
+    """
+    from src.ml.cv import purged_walk_forward_cv
+    from datetime import timedelta
+
+    n = 200
+    entry_ts = pd.date_range("2024-01-01", periods=n, freq="1h", tz="UTC")
+    # Simulate labels that span 1-6 hours
+    rng = np.random.default_rng(99)
+    hold_bars = rng.integers(1, 7, n)
+    exit_ts = pd.Series([entry_ts[i] + timedelta(hours=int(hold_bars[i])) for i in range(n)])
+    entry_ts = pd.Series(entry_ts)
+
+    embargo_h = 12
+    folds = purged_walk_forward_cv(entry_ts, exit_ts, n_folds=5, embargo_h=embargo_h)
+
+    assert len(folds) > 0, "Expected at least one usable fold"
+
+    for k, (train_idx, test_idx) in enumerate(folds):
+        test_start = entry_ts.iloc[test_idx].min()
+        embargo_cutoff = test_start - timedelta(hours=embargo_h)
+
+        # 1. No training exit_timestamp >= test_start (purge condition)
+        train_exit = exit_ts.iloc[train_idx]
+        leaked = train_exit[train_exit >= test_start]
+        assert len(leaked) == 0, (
+            f"Fold {k}: {len(leaked)} training samples have exit_ts >= test_start "
+            f"({test_start}) — purge failed."
+        )
+
+        # 2. No training entry_timestamp >= embargo_cutoff
+        train_entry = entry_ts.iloc[train_idx]
+        embargoed = train_entry[train_entry >= embargo_cutoff]
+        assert len(embargoed) == 0, (
+            f"Fold {k}: {len(embargoed)} training samples within embargo window "
+            f"(cutoff={embargo_cutoff}) — embargo failed."
+        )

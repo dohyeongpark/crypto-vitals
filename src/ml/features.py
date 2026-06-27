@@ -44,35 +44,41 @@ def build_feature_matrix(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     Returns (X, feature_names) where X has one row per ml_labels entry and
     columns matching FEATURE_NAMES. Rows with any NaN are dropped.
     """
-    X = pd.DataFrame(index=df.index)
-
-    # Tier 1
-    X["ou_zscore"] = df["ou_zscore"].astype(float)
-    X["abs_ou_zscore"] = X["ou_zscore"].abs()
-    X["ou_halflife"] = df["ou_halflife"].astype(float)
-    X["ou_kappa"] = df["ou_kappa"].astype(float)
-    X["ou_sigma_eq"] = df["ou_sigma_eq"].astype(float)
-
-    # Tier 2
-    X["eg_pvalue"] = df["eg_pvalue"].astype(float)
-    X["johansen_trace"] = df["johansen_trace"].astype(float)
-    X["is_cointegrated"] = (X["eg_pvalue"] < 0.05).astype(int)
-    X["johansen_sig"] = (X["johansen_trace"] > _JOHANSEN_95).astype(int)
-
-    # Tier 3
-    X["funding_spread"] = df["funding_spread"].astype(float)
-    X["basis_y"] = df["basis_y"].astype(float)
-    X["basis_x"] = df["basis_x"].astype(float)
-    X["basis_diff"] = X["basis_y"] - X["basis_x"]
-    X["taker_ratio_y"] = df["taker_ratio_y"].astype(float)
-    X["taker_ratio_x"] = df["taker_ratio_x"].astype(float)
-    X["taker_diff"] = X["taker_ratio_y"] - X["taker_ratio_x"]
-    X["spread_std"] = df["spread_std"].astype(float)
-
-    # Tier 4 — derived from entry_timestamp (tz-aware UTC)
     entry_ts = pd.to_datetime(df["entry_timestamp"], utc=True)
-    X["hour_of_day"] = entry_ts.dt.hour.astype(float)
-    X["day_of_week"] = entry_ts.dt.dayofweek.astype(float)
+
+    ou_zscore = df["ou_zscore"].astype(float)
+    eg_pvalue = df["eg_pvalue"].astype(float)
+    johansen_trace = df["johansen_trace"].astype(float)
+    basis_y = df["basis_y"].astype(float)
+    basis_x = df["basis_x"].astype(float)
+    taker_ratio_y = df["taker_ratio_y"].astype(float)
+    taker_ratio_x = df["taker_ratio_x"].astype(float)
+
+    X = pd.DataFrame({
+        # Tier 1
+        "ou_zscore": ou_zscore,
+        "abs_ou_zscore": ou_zscore.abs(),
+        "ou_halflife": df["ou_halflife"].astype(float),
+        "ou_kappa": df["ou_kappa"].astype(float),
+        "ou_sigma_eq": df["ou_sigma_eq"].astype(float),
+        # Tier 2
+        "eg_pvalue": eg_pvalue,
+        "johansen_trace": johansen_trace,
+        "is_cointegrated": (eg_pvalue < 0.05).astype(int),
+        "johansen_sig": (johansen_trace > _JOHANSEN_95).astype(int),
+        # Tier 3
+        "funding_spread": df["funding_spread"].astype(float),
+        "basis_y": basis_y,
+        "basis_x": basis_x,
+        "basis_diff": basis_y - basis_x,
+        "taker_ratio_y": taker_ratio_y,
+        "taker_ratio_x": taker_ratio_x,
+        "taker_diff": taker_ratio_y - taker_ratio_x,
+        "spread_std": df["spread_std"].astype(float),
+        # Tier 4 — derived from entry_timestamp (tz-aware UTC)
+        "hour_of_day": entry_ts.dt.hour.astype(float).values,
+        "day_of_week": entry_ts.dt.dayofweek.astype(float).values,
+    }, index=df.index)
 
     # Keep only declared feature order
     X = X[FEATURE_NAMES]
