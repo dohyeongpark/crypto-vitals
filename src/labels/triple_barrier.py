@@ -110,10 +110,11 @@ def compute_labels(
         exit_spread = float(spread_kalman[exit_idx])
 
         delta_zscore = abs(entry_zscore) - abs(exit_zscore)
-        spread_return = (
-            entry_side * (exit_spread - entry_spread) / abs(entry_spread)
-            if entry_spread != 0 else None
-        )
+        # Raw log-return of the spread position (no division by spread_kalman).
+        # Dividing by spread_kalman would explode: Kalman β minimizes spread variance,
+        # so spread_kalman ≈ 0, making any ratio meaningless.
+        # As a log-return: ≈ % P&L of the market-neutral portfolio for small moves.
+        spread_return = entry_side * (exit_spread - entry_spread)
 
         rows.append({
             "pair_id": PAIR_ID,

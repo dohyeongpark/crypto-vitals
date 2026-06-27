@@ -319,7 +319,9 @@ _ML_LABELS_SQL = f"""
     INSERT INTO ml_labels ({", ".join(_ML_LABELS_COLS)})
     VALUES %s
     ON CONFLICT (pair_id, interval, entry_timestamp, feature_version, label_version)
-    DO NOTHING
+    DO UPDATE SET
+        delta_zscore  = excluded.delta_zscore,
+        spread_return = excluded.spread_return
     RETURNING 1
 """
 
