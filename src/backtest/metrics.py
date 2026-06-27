@@ -14,7 +14,7 @@ def sharpe_ratio(returns: np.ndarray, trades_per_year: float) -> float:
     if len(returns) < 2:
         return float("nan")
     std = float(np.std(returns, ddof=1))
-    if std == 0:
+    if std < 1e-12:
         return float("nan")
     return float(np.mean(returns) / std * np.sqrt(trades_per_year))
 
