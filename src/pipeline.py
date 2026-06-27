@@ -73,6 +73,8 @@ def main() -> None:
                         help="OU z-score stop barrier threshold")
     parser.add_argument("--max-hold-h", type=int, default=TB_MAX_HOLD_H, dest="max_hold_h",
                         help="Maximum holding period in bars (hours)")
+    parser.add_argument("--incremental", action="store_true",
+                        help="Only process bars after the last processed timestamp (Steps 5-8)")
     args = parser.parse_args()
 
     now = datetime.now(timezone.utc)
@@ -131,21 +133,22 @@ def main() -> None:
     # ── Step 5: pair features ─────────────────────────────────────────────────
     if not args.skip_spread:
         logger.info("=== Step 5/8: pair spread / z-score ===")
-        spread_compute(args.window, args.version)
+        spread_compute(args.window, args.version, incremental=args.incremental)
     else:
         logger.info("=== Step 5/8: spread SKIPPED ===")
 
     # ── Step 6: regime features ───────────────────────────────────────────────
     if not args.skip_regime:
         logger.info("=== Step 6/8: regime features ===")
-        regime_compute(args.window, args.version)
+        regime_compute(args.window, args.version, incremental=args.incremental)
     else:
         logger.info("=== Step 6/8: regime SKIPPED ===")
 
     # ── Step 7: Kalman β / OU params / cointegration ──────────────────────────
     if not args.skip_kalman:
         logger.info("=== Step 7/8: Kalman β / OU params / cointegration ===")
-        kalman_ou_compute(args.window, args.version, Q=args.kalman_Q, R=args.kalman_R)
+        kalman_ou_compute(args.window, args.version, Q=args.kalman_Q, R=args.kalman_R,
+                          incremental=args.incremental)
     else:
         logger.info("=== Step 7/8: kalman SKIPPED ===")
 
@@ -155,6 +158,7 @@ def main() -> None:
         label_compute(
             args.version, args.label_version,
             stop_z=args.stop_z, max_hold_h=args.max_hold_h,
+            incremental=args.incremental,
         )
     else:
         logger.info("=== Step 8/8: labels SKIPPED ===")

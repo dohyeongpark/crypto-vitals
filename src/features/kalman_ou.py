@@ -41,17 +41,50 @@ ENTRY_THRESHOLD = 2.0
 EXIT_THRESHOLD = 0.5
 
 
-def _fetch_spot_closes() -> pd.DataFrame:
-    """Load spot close prices for BTC and ETH, aligned by timestamp."""
+KALMAN_OVERLAP_H = 720  # warm-up bars for incremental Kalman state convergence
+
+
+def _fetch_max_kalman_ts(version: str) -> pd.Timestamp | None:
+    """Return latest timestamp in pair_features that already has Kalman features set."""
     sql = """
-        SELECT timestamp, symbol, close
-        FROM   market_data
-        WHERE  symbol      IN ('BTCUSDT', 'ETHUSDT')
-          AND  market_type = 'spot'
-          AND  interval    = '1h'
-        ORDER  BY timestamp
+        SELECT MAX(timestamp) AS max_ts
+        FROM   pair_features
+        WHERE  pair_id         = 'ETHUSDT_BTCUSDT'
+          AND  feature_version = %(fv)s
+          AND  ou_zscore       IS NOT NULL
     """
-    df = pd.read_sql_query(sql, get_engine(), parse_dates=["timestamp"])
+    df = pd.read_sql_query(sql, get_engine(), params={"fv": version})
+    val = df["max_ts"].iloc[0]
+    if val is None or pd.isnull(val):
+        return None
+    ts = pd.Timestamp(val)
+    return ts.tz_localize("UTC") if ts.tzinfo is None else ts
+
+
+def _fetch_spot_closes(since: pd.Timestamp | None = None) -> pd.DataFrame:
+    """Load spot close prices for BTC and ETH, aligned by timestamp."""
+    if since is not None:
+        sql = """
+            SELECT timestamp, symbol, close
+            FROM   market_data
+            WHERE  symbol      IN ('BTCUSDT', 'ETHUSDT')
+              AND  market_type = 'spot'
+              AND  interval    = '1h'
+              AND  timestamp   >= %(since)s
+            ORDER  BY timestamp
+        """
+        df = pd.read_sql_query(sql, get_engine(), params={"since": since},
+                               parse_dates=["timestamp"])
+    else:
+        sql = """
+            SELECT timestamp, symbol, close
+            FROM   market_data
+            WHERE  symbol      IN ('BTCUSDT', 'ETHUSDT')
+              AND  market_type = 'spot'
+              AND  interval    = '1h'
+            ORDER  BY timestamp
+        """
+        df = pd.read_sql_query(sql, get_engine(), parse_dates=["timestamp"])
     wide = df.pivot(index="timestamp", columns="symbol", values="close").sort_index()
     wide = wide.dropna()
     wide.index = wide.index.tz_localize("UTC") if wide.index.tz is None else wide.index
@@ -215,12 +248,26 @@ def compute_and_store(
     version: str,
     Q: float = 1e-6,
     R: float = 1e-3,
+    incremental: bool = False,
 ) -> int:
     """
     Compute all Phase 2 features and UPDATE pair_features rows for `version`.
     Returns number of rows updated.
     """
-    wide = _fetch_spot_closes()
+    if incremental:
+        max_ts = _fetch_max_kalman_ts(version)
+        # Fetch KALMAN_OVERLAP_H bars before max_ts so the Kalman filter
+        # converges to a good state estimate before hitting the new rows.
+        # The UPDATE for overlap rows is harmless — it re-computes with warm state.
+        fetch_since = (max_ts - pd.Timedelta(hours=KALMAN_OVERLAP_H)) if max_ts else None
+        logger.info(
+            "Incremental mode: fetching from %s (max_processed=%s, overlap=%dh)",
+            fetch_since, max_ts, KALMAN_OVERLAP_H,
+        )
+    else:
+        fetch_since = None
+
+    wide = _fetch_spot_closes(since=fetch_since)
     if wide.empty or Y_SYMBOL not in wide.columns or X_SYMBOL not in wide.columns:
         logger.error("Missing spot close data for %s or %s", Y_SYMBOL, X_SYMBOL)
         return 0
@@ -312,9 +359,11 @@ def main() -> None:
                         help="Kalman process noise variance (controls β adaptation speed)")
     parser.add_argument("--kalman-R", type=float, default=1e-3, dest="kalman_R",
                         help="Kalman observation noise variance (log-price residual variance)")
+    parser.add_argument("--incremental", action="store_true")
     args = parser.parse_args()
 
-    compute_and_store(args.window, args.version, Q=args.kalman_Q, R=args.kalman_R)
+    compute_and_store(args.window, args.version, Q=args.kalman_Q, R=args.kalman_R,
+                      incremental=args.incremental)
 
 
 if __name__ == "__main__":

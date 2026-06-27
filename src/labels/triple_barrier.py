@@ -35,22 +35,55 @@ logger = logging.getLogger(__name__)
 PAIR_ID = "ETHUSDT_BTCUSDT"
 
 
-def _fetch_features(feature_version: str) -> pd.DataFrame:
-    """Load ou_zscore + spread_kalman from pair_features, ordered by timestamp."""
+def _fetch_max_entry_ts(label_version: str) -> pd.Timestamp | None:
+    """Return the latest entry_timestamp already stored for this label_version."""
     sql = """
-        SELECT timestamp, ou_zscore, spread_kalman
-        FROM   pair_features
-        WHERE  pair_id         = 'ETHUSDT_BTCUSDT'
-          AND  interval        = '1h'
-          AND  feature_version = %(fv)s
-          AND  ou_zscore       IS NOT NULL
-          AND  spread_kalman   IS NOT NULL
-        ORDER  BY timestamp
+        SELECT MAX(entry_timestamp) AS max_ts
+        FROM   ml_labels
+        WHERE  pair_id       = 'ETHUSDT_BTCUSDT'
+          AND  label_version = %(lv)s
     """
-    df = pd.read_sql_query(
-        sql, get_engine(), params={"fv": feature_version},
-        parse_dates=["timestamp"],
-    )
+    df = pd.read_sql_query(sql, get_engine(), params={"lv": label_version})
+    val = df["max_ts"].iloc[0]
+    if val is None or pd.isnull(val):
+        return None
+    ts = pd.Timestamp(val)
+    return ts.tz_localize("UTC") if ts.tzinfo is None else ts
+
+
+def _fetch_features(feature_version: str, since: pd.Timestamp | None = None) -> pd.DataFrame:
+    """Load ou_zscore + spread_kalman from pair_features, ordered by timestamp."""
+    if since is not None:
+        sql = """
+            SELECT timestamp, ou_zscore, spread_kalman
+            FROM   pair_features
+            WHERE  pair_id         = 'ETHUSDT_BTCUSDT'
+              AND  interval        = '1h'
+              AND  feature_version = %(fv)s
+              AND  ou_zscore       IS NOT NULL
+              AND  spread_kalman   IS NOT NULL
+              AND  timestamp       >= %(since)s
+            ORDER  BY timestamp
+        """
+        df = pd.read_sql_query(
+            sql, get_engine(), params={"fv": feature_version, "since": since},
+            parse_dates=["timestamp"],
+        )
+    else:
+        sql = """
+            SELECT timestamp, ou_zscore, spread_kalman
+            FROM   pair_features
+            WHERE  pair_id         = 'ETHUSDT_BTCUSDT'
+              AND  interval        = '1h'
+              AND  feature_version = %(fv)s
+              AND  ou_zscore       IS NOT NULL
+              AND  spread_kalman   IS NOT NULL
+            ORDER  BY timestamp
+        """
+        df = pd.read_sql_query(
+            sql, get_engine(), params={"fv": feature_version},
+            parse_dates=["timestamp"],
+        )
     if df["timestamp"].dt.tz is None:
         df["timestamp"] = df["timestamp"].dt.tz_localize("UTC")
     return df
@@ -143,12 +176,18 @@ def compute_and_store(
     exit_z: float = TB_EXIT_Z,
     stop_z: float = TB_STOP_Z,
     max_hold_h: int = TB_MAX_HOLD_H,
+    incremental: bool = False,
 ) -> int:
     """
     Load pair_features, apply triple-barrier labeling, upsert into ml_labels.
-    Returns number of rows inserted.
+    Returns number of rows inserted/updated.
     """
-    df = _fetch_features(feature_version)
+    if incremental:
+        max_entry_ts = _fetch_max_entry_ts(label_version)
+        logger.info("Incremental mode: scanning pair_features from %s", max_entry_ts)
+        df = _fetch_features(feature_version, since=max_entry_ts)
+    else:
+        df = _fetch_features(feature_version)
     if df.empty:
         logger.warning("No pair_features rows for version=%s — skipping", feature_version)
         return 0
@@ -196,12 +235,14 @@ def main() -> None:
     parser.add_argument("--exit-z", type=float, default=TB_EXIT_Z, dest="exit_z")
     parser.add_argument("--stop-z", type=float, default=TB_STOP_Z, dest="stop_z")
     parser.add_argument("--max-hold-h", type=int, default=TB_MAX_HOLD_H, dest="max_hold_h")
+    parser.add_argument("--incremental", action="store_true")
     args = parser.parse_args()
 
     compute_and_store(
         args.feature_version, args.label_version,
         entry_z=args.entry_z, exit_z=args.exit_z,
         stop_z=args.stop_z, max_hold_h=args.max_hold_h,
+        incremental=args.incremental,
     )
 
 

@@ -33,8 +33,41 @@ Y_SYMBOL = "ETHUSDT"
 X_SYMBOL = "BTCUSDT"
 
 
-def _fetch_market_data() -> pd.DataFrame:
+def _fetch_max_regime_ts(version: str) -> pd.Timestamp | None:
+    """Return latest timestamp in pair_features that already has regime features set."""
+    sql = """
+        SELECT MAX(timestamp) AS max_ts
+        FROM   pair_features
+        WHERE  pair_id         = 'ETHUSDT_BTCUSDT'
+          AND  feature_version = %(fv)s
+          AND  basis_y         IS NOT NULL
+    """
+    df = pd.read_sql_query(sql, get_engine(), params={"fv": version})
+    val = df["max_ts"].iloc[0]
+    if val is None or pd.isnull(val):
+        return None
+    ts = pd.Timestamp(val)
+    return ts.tz_localize("UTC") if ts.tzinfo is None else ts
+
+
+def _fetch_market_data(since: pd.Timestamp | None = None) -> pd.DataFrame:
     """Load spot + perp close, volume, taker_buy_volume, funding_rate for both symbols."""
+    if since is not None:
+        sql = """
+            SELECT symbol, market_type, timestamp,
+                   close::float            AS close,
+                   volume::float           AS volume,
+                   taker_buy_volume::float AS taker_buy_volume,
+                   funding_rate::float     AS funding_rate
+            FROM   market_data
+            WHERE  symbol      IN ('BTCUSDT', 'ETHUSDT')
+              AND  market_type IN ('spot', 'perp')
+              AND  interval    = '1h'
+              AND  timestamp   >= %(since)s
+            ORDER  BY timestamp
+        """
+        return pd.read_sql_query(sql, get_engine(), params={"since": since},
+                                 parse_dates=["timestamp"])
     sql = """
         SELECT symbol, market_type, timestamp,
                close::float            AS close,
@@ -84,8 +117,13 @@ def _compute_regime(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def compute_and_store(window: int, version: str) -> int:  # noqa: ARG001 (window unused here)
-    df_raw = _fetch_market_data()
+def compute_and_store(window: int, version: str, incremental: bool = False) -> int:  # noqa: ARG001 (window unused here)
+    if incremental:
+        max_ts = _fetch_max_regime_ts(version)
+        logger.info("Incremental mode: fetching regime data from %s", max_ts)
+        df_raw = _fetch_market_data(since=max_ts)
+    else:
+        df_raw = _fetch_market_data()
     if df_raw.empty:
         logger.error("No market_data found — run pipeline Step 1 first")
         return 0
@@ -137,9 +175,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Compute regime features and update pair_features")
     parser.add_argument("--window", type=int, default=FEATURE_WINDOW_H)
     parser.add_argument("--version", default=FEATURE_VERSION)
+    parser.add_argument("--incremental", action="store_true")
     args = parser.parse_args()
 
-    compute_and_store(args.window, args.version)
+    compute_and_store(args.window, args.version, incremental=args.incremental)
 
 
 if __name__ == "__main__":
