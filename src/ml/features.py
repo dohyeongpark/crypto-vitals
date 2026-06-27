@@ -1,27 +1,20 @@
 """
-Phase 3 — Feature matrix builder for meta-labeling.
+Phase 5 — Feature matrix builder for meta-labeling (pruned to 13 features).
+
+SHAP analysis (Phase 4) showed bottom-6 features have near-zero importance:
+ou_halflife, ou_kappa, eg_pvalue, johansen_trace, is_cointegrated, johansen_sig.
+Removed to reduce overfitting risk.
 
 All features are derived from pair_features at entry_timestamp (causal).
 No lookahead: the label is in ml_labels, not in this feature set.
 """
-import numpy as np
 import pandas as pd
-
-# Johansen 95% critical value for 2 variables (r=0)
-_JOHANSEN_95 = 15.41
 
 FEATURE_NAMES = [
     # Tier 1 — OU signal
     "ou_zscore",
     "abs_ou_zscore",
-    "ou_halflife",
-    "ou_kappa",
     "ou_sigma_eq",
-    # Tier 2 — cointegration quality
-    "eg_pvalue",
-    "johansen_trace",
-    "is_cointegrated",    # int(eg_pvalue < 0.05)
-    "johansen_sig",       # int(johansen_trace > 15.41)
     # Tier 3 — regime / microstructure
     "funding_spread",
     "basis_y",
@@ -47,8 +40,6 @@ def build_feature_matrix(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     entry_ts = pd.to_datetime(df["entry_timestamp"], utc=True)
 
     ou_zscore = df["ou_zscore"].astype(float)
-    eg_pvalue = df["eg_pvalue"].astype(float)
-    johansen_trace = df["johansen_trace"].astype(float)
     basis_y = df["basis_y"].astype(float)
     basis_x = df["basis_x"].astype(float)
     taker_ratio_y = df["taker_ratio_y"].astype(float)
@@ -58,14 +49,7 @@ def build_feature_matrix(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
         # Tier 1
         "ou_zscore": ou_zscore,
         "abs_ou_zscore": ou_zscore.abs(),
-        "ou_halflife": df["ou_halflife"].astype(float),
-        "ou_kappa": df["ou_kappa"].astype(float),
         "ou_sigma_eq": df["ou_sigma_eq"].astype(float),
-        # Tier 2
-        "eg_pvalue": eg_pvalue,
-        "johansen_trace": johansen_trace,
-        "is_cointegrated": (eg_pvalue < 0.05).astype(int),
-        "johansen_sig": (johansen_trace > _JOHANSEN_95).astype(int),
         # Tier 3
         "funding_spread": df["funding_spread"].astype(float),
         "basis_y": basis_y,
