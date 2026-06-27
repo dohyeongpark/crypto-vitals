@@ -50,9 +50,12 @@ def _binary_label(tb_label: pd.Series) -> pd.Series:
     return (tb_label == 1).astype(int)
 
 
-def train(feature_version: str, label_version: str) -> None:
+def train(feature_version: str, label_version: str,
+          n_estimators: int = 300, max_depth: int = 4) -> None:
     from lightgbm import LGBMClassifier
     from sklearn.metrics import roc_auc_score, precision_score, recall_score
+
+    params = {**_LGBM_PARAMS, "n_estimators": n_estimators, "max_depth": max_depth}
 
     logger.info("Loading training data (fv=%s, lv=%s)", feature_version, label_version)
     df = load_labels_for_training(feature_version, label_version)
@@ -86,7 +89,7 @@ def train(feature_version: str, label_version: str) -> None:
             logger.warning("Fold %d: single class in train — skipping", k)
             continue
 
-        clf = LGBMClassifier(**_LGBM_PARAMS)
+        clf = LGBMClassifier(**params)
         clf.fit(X_tr, y_tr)
         prob = clf.predict_proba(X_te)[:, 1]
 
@@ -113,7 +116,7 @@ def train(feature_version: str, label_version: str) -> None:
 
     # ── Final model on full data ──────────────────────────────────────────────
     logger.info("Training final model on full dataset (%d samples)", len(y))
-    final_clf = LGBMClassifier(**_LGBM_PARAMS)
+    final_clf = LGBMClassifier(**params)
     final_clf.fit(X, y)
 
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
@@ -134,7 +137,7 @@ def train(feature_version: str, label_version: str) -> None:
         "cv_folds": len(cv_scores["roc_auc"]),
         "cv_roc_auc_mean": float(np.mean(cv_scores["roc_auc"])) if cv_scores["roc_auc"] else None,
         "cv_roc_auc_std": float(np.std(cv_scores["roc_auc"])) if cv_scores["roc_auc"] else None,
-        "lgbm_params": _LGBM_PARAMS,
+        "lgbm_params": params,
     }
     meta_path.write_text(json.dumps(meta, indent=2))
     logger.info("Metadata saved → %s", meta_path)
@@ -151,9 +154,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train LightGBM meta-labeling model")
     parser.add_argument("--feature-version", default=FEATURE_VERSION, dest="feature_version")
     parser.add_argument("--label-version", default=LABEL_VERSION, dest="label_version")
+    parser.add_argument("--n-estimators", type=int, default=300, dest="n_estimators")
+    parser.add_argument("--max-depth", type=int, default=4, dest="max_depth")
     args = parser.parse_args()
 
-    train(args.feature_version, args.label_version)
+    train(args.feature_version, args.label_version,
+          n_estimators=args.n_estimators, max_depth=args.max_depth)
 
 
 if __name__ == "__main__":
